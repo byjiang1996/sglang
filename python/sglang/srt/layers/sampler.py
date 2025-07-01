@@ -3,6 +3,7 @@ from typing import List
 
 import torch
 import torch.distributed as dist
+from flashinfer.sampling import softmax
 from torch import nn
 
 from sglang.srt.distributed import get_tp_group
@@ -76,8 +77,7 @@ class Sampler(nn.Module):
                 logprobs = torch.nn.functional.log_softmax(logits, dim=-1)
         else:
             # Post process logits
-            logits.div_(sampling_info.temperatures)
-            logits[:] = torch.softmax(logits, dim=-1)
+            logits[:] = softmax(logits, temperature=sampling_info.temperatures)
             probs = logits
             del logits
 

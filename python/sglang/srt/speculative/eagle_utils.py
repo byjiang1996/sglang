@@ -10,6 +10,7 @@ import torch
 import torch.nn.functional as F
 import triton
 import triton.language as tl
+from flashinfer.sampling import softmax
 
 from sglang.srt.constrained.base_grammar_backend import BaseGrammarObject
 from sglang.srt.layers.attention.utils import create_flashinfer_kv_indices_triton
@@ -411,8 +412,8 @@ class EagleVerifyInput:
                 sampling_info.temperatures, self.draft_token_num, dim=0
             )  # (bs * draft_token_num, 1)
 
-            target_probs = F.softmax(
-                logits_output.next_token_logits / expanded_temperature, dim=-1
+            target_probs = softmax(
+                logits_output.next_token_logits, temperature=expanded_temperature
             )  # (bs * draft_token_num, vocab_size)
             target_probs = top_k_renorm_prob(
                 target_probs,

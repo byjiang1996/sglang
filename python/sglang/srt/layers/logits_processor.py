@@ -20,6 +20,7 @@ from typing import List, Optional, Union
 import torch
 import triton
 import triton.language as tl
+from flashinfer.sampling import softmax
 from torch import nn
 
 from sglang.srt.distributed import (
@@ -556,10 +557,6 @@ class LogitsProcessor(nn.Module):
         Returns:
             torch.Tensor: logprobs from logits
         """
-        # Scale logits if temperature scaling is enabled
-        if logits_metadata.temp_scaled_logprobs:
-            last_logits = last_logits / logits_metadata.temperature
-
         # Normalize logprobs if top_p normalization is enabled
         # NOTE: only normalize logprobs when top_p is set and not equal to 1.0
         if (
@@ -568,7 +565,14 @@ class LogitsProcessor(nn.Module):
         ):
             from sglang.srt.layers.sampler import top_p_normalize_probs_torch
 
-            probs = torch.softmax(last_logits, dim=-1)
+            probs = softmax(
+                last_logits,
+                temperature=(
+                    logits_metadata.temperature
+                    if logits_metadata.temp_scaled_logprobs
+                    else None
+                ),
+            )
             del last_logits
             probs = top_p_normalize_probs_torch(probs, logits_metadata.top_p)
             return torch.log(probs)
