@@ -153,6 +153,10 @@ def run_moe_ep_preproess(topk_ids: torch.Tensor, num_experts: int):
         reorder_topk_ids, seg_indptr, topk_ids.numel()
     )
 
+    # num_tokens = topk_ids.numel()
+    # dst_ids = torch.arange(num_tokens, device=reorder_ids.device, dtype=reorder_ids.dtype)
+    # src2dst = torch.empty_like(reorder_ids)
+    # src2dst[reorder_ids] = dst_ids
     BLOCK_SIZE = 512
     grid = (triton.cdiv(topk_ids.numel(), BLOCK_SIZE),)
     compute_src2dst_triton_kernel[grid](

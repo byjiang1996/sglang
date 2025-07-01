@@ -1623,6 +1623,16 @@ def fused_experts_impl(
             curr_topk_ids, config["BLOCK_SIZE_M"], E
         )
 
+        # w1[curr_topk_ids]: select valid expert weights from total expert weights matrix (w1)
+        # WEIGHTS matmul HIDDEN_STATES per item in a batch
+        # torch.stack([torch.matmul(w1[curr_topk_ids][i], curr_hidden_states[i]) for i in range(w1[curr_topk_ids].shape[0])], dim=0) == intermediate_cache1
+        # # For each token i and its top-k experts j:
+        # for i in range(M):  # M tokens
+        #     for j in range(topk):  # top-k experts per token
+        #         expert_id = curr_topk_ids[i, j]
+        #         # intermediate_cache2[i*topk + j] contains activated result from first layer
+        #         # w2[expert_id] @ intermediate_cache2[i*topk + j]
+        #         intermediate_cache3[i, j] = w2[expert_id] @ intermediate_cache2[i*topk + j]
         invoke_fused_moe_kernel(
             curr_hidden_states,
             w1,
@@ -1663,6 +1673,15 @@ def fused_experts_impl(
         else:
             raise ValueError(f"Unsupported activation: {activation=}")
 
+        # For each token i and its top-k experts j:
+        # topk = curr_topk_ids.shape[1]
+        # for i in range(M):  # M tokens
+        #     for j in range(topk):  # top-k experts per token
+        #         expert_id = curr_topk_ids[i, j]
+        #         weight = curr_topk_weights[i, j]  # Router weight for this token-expert pair
+        #         # intermediate_cache2[i*topk + j] contains activated result from first layer
+        #         # w2[expert_id] @ intermediate_cache2[i*topk + j] * weight
+        #         intermediate_cache3[i, j] = w2[expert_id] @ intermediate_cache2[i*topk + j] * weight
         invoke_fused_moe_kernel(
             intermediate_cache2,
             w2,
@@ -1708,6 +1727,7 @@ def fused_experts_impl(
             else:
                 # According to micro benchmark results, torch.compile can get better performance for small token.
                 if tokens_in_chunk <= 32:
+                    # intermediate_cache3.sum(dim = 1) == out_hidden_states
                     moe_sum_reduce_torch_compile(
                         intermediate_cache3.view(*intermediate_cache3.shape),
                         out_hidden_states[begin_chunk_idx:end_chunk_idx],

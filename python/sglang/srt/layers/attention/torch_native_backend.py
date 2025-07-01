@@ -93,6 +93,30 @@ class TorchNativeAttnBackend(AttentionBackend):
             per_req_key = k_cache[per_req_tokens].movedim(0, query.dim() - 2)
             per_req_value = v_cache[per_req_tokens].movedim(0, query.dim() - 2)
 
+            # # Grouped Query Attention: https://klu.ai/glossary/grouped-query-attention
+            # # per_req_query_redudant: [num_query_heads, num_tokens, head_dim]
+            # # per_req_key: [num_kv_heads, num_tokens, head_dim]
+            # # per_req_value: [num_kv_heads, num_tokens, head_dim]
+            # if enable_gqa:
+            #     num_query_heads = per_req_query_redudant.shape[0]
+            #     num_kv_heads = per_req_key.shape[0]
+            #     group_size = num_query_heads // num_kv_heads
+            #     per_req_key = per_req_key.repeat_interleave(group_size, dim=0)
+            #     per_req_value = per_req_value.repeat_interleave(group_size, dim=0)
+            # attn_scores = torch.matmul(per_req_query_redudant, per_req_key.transpose(-2, -1)) # [num_query_heads, num_tokens, num_tokens]
+            # if scaling is not None:
+            #     attn_scores = attn_scores * scaling
+            # else:
+            #     attn_scores = attn_scores / (per_req_query_redudant.size(-1) ** 0.5)
+            # if causal:
+            #     L, S = per_req_query_redudant.shape[1], per_req_key.shape[1]
+            #     attn_bias = torch.zeros(L, S, dtype=per_req_query_redudant.dtype, device=per_req_query_redudant.device)
+            #     temp_mask = torch.ones(L, S, dtype=torch.bool).tril(diagonal=0)
+            #     attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+            #     attn_bias.to(per_req_query_redudant.dtype)
+            #     attn_scores = attn_scores + attn_bias
+            # attn_weights = torch.softmax(attn_scores, dim=-1) # [num_query_heads, num_tokens, num_tokens]
+            # per_req_out = torch.matmul(attn_weights, per_req_value).squeeze(0).movedim(per_req_out_redudant.dim() - 2, 0) # [num_tokens, num_query_heads, head_dim]
             per_req_out_redudant = (
                 scaled_dot_product_attention(
                     per_req_query_redudant.unsqueeze(0),
@@ -162,6 +186,23 @@ class TorchNativeAttnBackend(AttentionBackend):
             per_req_key = k_cache[per_req_tokens].movedim(0, query.dim() - 2)
             per_req_value = v_cache[per_req_tokens].movedim(0, query.dim() - 2)
 
+            # # Grouped Query Attention: https://klu.ai/glossary/grouped-query-attention
+            # # per_req_query: [num_query_heads, num_tokens_in_q=1, head_dim]
+            # # per_req_key: [num_kv_heads, num_tokens_in_kv, head_dim]
+            # # per_req_value: [num_kv_heads, num_tokens_in_kv, head_dim]
+            # if enable_gqa:
+            #     num_query_heads = per_req_query.shape[0]
+            #     num_kv_heads = per_req_key.shape[0]
+            #     group_size = num_query_heads // num_kv_heads
+            #     per_req_key = per_req_key.repeat_interleave(group_size, dim=0)
+            #     per_req_value = per_req_value.repeat_interleave(group_size, dim=0)
+            # attn_scores = torch.matmul(per_req_query, per_req_key.transpose(-2, -1)) # [num_query_heads, num_tokens_in_q, num_tokens_in_kv]
+            # if scaling is not None:
+            #     attn_scores = attn_scores * scaling
+            # else:
+            #     attn_scores = attn_scores / (per_req_query.size(-1) ** 0.5)
+            # attn_weights = torch.softmax(attn_scores, dim=-1) # [num_query_heads, num_tokens_in_q, num_tokens_in_kv]
+            # per_req_out = torch.matmul(attn_weights, per_req_value).squeeze(0).movedim(per_req_query.dim() - 2, 0) # [num_tokens_in_q, num_query_heads, head_dim]
             per_req_out = (
                 scaled_dot_product_attention(
                     per_req_query.unsqueeze(0),
