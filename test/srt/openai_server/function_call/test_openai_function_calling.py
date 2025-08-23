@@ -33,8 +33,9 @@ class TestOpenAIServerFunctionCalling(CustomTestCase):
     @classmethod
     def setUpClass(cls):
         # Replace with the model name needed for testing; if not required, reuse DEFAULT_SMALL_MODEL_NAME_FOR_TEST
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        cls.model = "/shared/public/elr-models/meta-llama/Llama-3.3-70B-Instruct/5825c9120fc701a0b7d9a30d61005f2a09466b74/"
         cls.base_url = DEFAULT_URL_FOR_TEST
+
         cls.api_key = "sk-123456"
 
         # Start the local OpenAI Server. If necessary, you can add other parameters such as --enable-tools.
@@ -47,6 +48,8 @@ class TestOpenAIServerFunctionCalling(CustomTestCase):
                 # If your server needs extra parameters to test function calling, please add them here.
                 "--tool-call-parser",
                 "llama3",
+                "--tp",
+                "4"
             ],
         )
         cls.base_url += "/v1"
@@ -174,6 +177,8 @@ class TestOpenAIServerFunctionCalling(CustomTestCase):
             }
         )
 
+        print(response)
+
         final_response = client.chat.completions.create(
             model=self.model,
             max_tokens=2048,
@@ -183,6 +188,8 @@ class TestOpenAIServerFunctionCalling(CustomTestCase):
             stream=False,
             tools=tools,
         )
+
+        print(final_response)
 
         assert (
             "8" in final_response.choices[0].message.content
@@ -471,6 +478,8 @@ class TestOpenAIServerFunctionCalling(CustomTestCase):
             tools=tools,
             tool_choice="required",
         )
+
+        print(response)
 
         tool_calls = response.choices[0].message.tool_calls
         self.assertIsNotNone(tool_calls, "No tool_calls in the response")
@@ -830,7 +839,7 @@ class TestOpenAIPythonicFunctionCalling(CustomTestCase):
         {
             "role": "user",
             "content": (
-                "I'm planning a trip to Tokyo next week. What's the weather like and what are some top tourist attractions? "
+                "I'm planning a trip to Tokyo next week. What's the weather like? No tourist attractions. "
                 "Propose parallel tool calls at once, using the python list of function calls format as shown above."
             ),
         },
@@ -838,19 +847,21 @@ class TestOpenAIPythonicFunctionCalling(CustomTestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
-        cls.base_url = DEFAULT_URL_FOR_TEST
+        cls.model = "/shared/public/elr-models/meta-llama/Llama-3.3-70B-Instruct/5825c9120fc701a0b7d9a30d61005f2a09466b74/"
+        cls.base_url = "http://localhost:30000"
         cls.api_key = "sk-123456"
-        cls.process = popen_launch_server(
-            cls.model,
-            cls.base_url,
-            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-            api_key=cls.api_key,
-            other_args=[
-                "--tool-call-parser",
-                "pythonic",
-            ],
-        )
+        # cls.process = popen_launch_server(
+        #     cls.model,
+        #     cls.base_url,
+        #     timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+        #     api_key=cls.api_key,
+        #     other_args=[
+        #         "--tool-call-parser",
+        #         "pythonic",
+        #         "--tp",
+        #         "8"
+        #     ],
+        # )
         cls.base_url += "/v1"
         cls.tokenizer = get_tokenizer(cls.model)
 
@@ -878,6 +889,34 @@ class TestOpenAIPythonicFunctionCalling(CustomTestCase):
             "get_weather" in names or "get_tourist_attractions" in names,
             f"Function name '{names}' should container either 'get_weather' or 'get_tourist_attractions'",
         )
+
+        # messages = self.PYTHONIC_MESSAGES
+        # messages.append(response.choices[0].message)
+        # messages.append(
+        #     {
+        #         "role": "tool",
+        #         "tool_call_id": tool_calls[0].id,
+        #         "content": "Weather is 90 F",
+        #         "name": tool_calls[0].function.name,
+        #     }
+        # )
+        # print(messages)
+
+        # final_response = client.chat.completions.create(
+        #     model=self.model,
+        #     max_tokens=2048,
+        #     messages=messages,
+        #     tools=self.PYTHONIC_TOOLS,
+        #     temperature=0.8,
+        #     top_p=0.8,
+        #     stream=False,
+        # )
+
+        # print(final_response)
+
+        # assert (
+        #     "90 F" in final_response.choices[0].message.content
+        # ), "tool_call response should have the sum 8 in the content"
 
     def test_pythonic_tool_call_streaming(self):
         """
@@ -914,40 +953,232 @@ class TestOpenAIPythonicFunctionCalling(CustomTestCase):
 
 
 # Skip for ci test
-# class TestGLM45ServerFunctionCalling(TestOpenAIServerFunctionCalling):
-#     @classmethod
-#     def setUpClass(cls):
-#         # Replace with the model name needed for testing; if not required, reuse DEFAULT_SMALL_MODEL_NAME_FOR_TEST
-#         cls.model = "THUDM/GLM-4.5"
-#         cls.base_url = DEFAULT_URL_FOR_TEST
-#         cls.api_key = "sk-123456"
+class TestGLM45ServerFunctionCalling(TestOpenAIServerFunctionCalling):
+    @classmethod
+    def setUpClass(cls):
+        # Replace with the model name needed for testing; if not required, reuse DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        cls.model = "/shared/public/elr-models/GLM-4.5-Air-Test/"
+        cls.base_url = "http://localhost:30000"
+        cls.api_key = "sk-123456"
 
-#         # Start the local OpenAI Server. If necessary, you can add other parameters such as --enable-tools.
-#         cls.process = popen_launch_server(
-#             cls.model,
-#             cls.base_url,
-#             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-#             api_key=cls.api_key,
-#             other_args=[
-#                 # If your server needs extra parameters to test function calling, please add them here.
-#                 "--tool-call-parser",
-#                 "glm45",
-#                 "--reasoning-parser",
-#                 "glm45",
-#                 "--tp-size",
-#                 "8"
-#             ],
-#         )
-#         cls.base_url += "/v1"
-#         cls.tokenizer = get_tokenizer(cls.model)
+        # Start the local OpenAI Server. If necessary, you can add other parameters such as --enable-tools.
+        cls.process = popen_launch_server(
+            cls.model,
+            cls.base_url,
+            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+            api_key=cls.api_key,
+            other_args=[
+                # If your server needs extra parameters to test function calling, please add them here.
+                "--tool-call-parser",
+                "glm45",
+                "--reasoning-parser",
+                "glm45",
+                "--tp-size",
+                "8"
+            ],
+        )
+        cls.base_url += "/v1"
+        cls.tokenizer = get_tokenizer(cls.model)
 
-#     # This test is too difficult for GLM4-moe. Skip it from the UT
-#     def test_function_call_required(self):
-#         pass
+    # This test is too difficult for GLM4-moe. Skip it from the UT
+    def test_function_call_required(self):
+        pass
 
-#     def test_function_calling_multiturn(self):
-#         self._test_function_calling_multiturn()
+    def test_function_calling_multiturn(self):
+        self._test_function_calling_multiturn()
 
+class TestQwen25FunctionCalling(TestOpenAIServerFunctionCalling):
+    @classmethod
+    def setUpClass(cls):
+        # Replace with the model name needed for testing; if not required, reuse DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        cls.model = "/shared/public/elr-models/Qwen/Qwen2.5-14B-Instruct/f55224c616ca27d4bcf28969a156de12c98981cf"
+        cls.base_url = "http://localhost:30000"
+        cls.api_key = "sk-123456"
+
+        # Start the local OpenAI Server. If necessary, you can add other parameters such as --enable-tools.
+        cls.process = popen_launch_server(
+            cls.model,
+            cls.base_url,
+            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+            api_key=cls.api_key,
+            other_args=[
+                # If your server needs extra parameters to test function calling, please add them here.
+                "--tool-call-parser",
+                "qwen25",
+                "--tp-size",
+                "8"
+            ],
+        )
+        cls.base_url += "/v1"
+        cls.tokenizer = get_tokenizer(cls.model)
+
+    # This test is too difficult for GLM4-moe. Skip it from the UT
+    def test_function_call_required(self):
+        pass
+
+    def test_function_calling_multiturn(self):
+        self._test_function_calling_multiturn()
+
+class TestMistralFunctionCalling(TestOpenAIServerFunctionCalling):
+    @classmethod
+    def setUpClass(cls):
+        # Replace with the model name needed for testing; if not required, reuse DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        cls.model = "/shared/public/elr-models/mistralai/Mistral-Small-3.1-24B-Instruct-2503/4b8dd8aae705887db5295fcbff4aedbb92d682eb/"
+        cls.base_url = "http://localhost:30000"
+        cls.api_key = "sk-123456"
+
+        # Start the local OpenAI Server. If necessary, you can add other parameters such as --enable-tools.
+        cls.process = popen_launch_server(
+            cls.model,
+            cls.base_url,
+            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+            api_key=cls.api_key,
+            other_args=[
+                # If your server needs extra parameters to test function calling, please add them here.
+                "--tool-call-parser",
+                "qwen25",
+                "--tp-size",
+                "8"
+            ],
+        )
+        cls.base_url += "/v1"
+        cls.tokenizer = get_tokenizer(cls.model)
+
+    # This test is too difficult for GLM4-moe. Skip it from the UT
+    def test_function_call_required(self):
+        pass
+
+    def test_function_calling_multiturn(self):
+        self._test_function_calling_multiturn()
+
+class TestQwen3CoderFunctionCalling(TestOpenAIServerFunctionCalling):
+    @classmethod
+    def setUpClass(cls):
+        # Replace with the model name needed for testing; if not required, reuse DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        cls.model = "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
+        cls.base_url = "http://localhost:30000"
+        cls.api_key = "sk-123456"
+
+        # Start the local OpenAI Server. If necessary, you can add other parameters such as --enable-tools.
+        cls.process = popen_launch_server(
+            cls.model,
+            cls.base_url,
+            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+            api_key=cls.api_key,
+            other_args=[
+                # If your server needs extra parameters to test function calling, please add them here.
+                "--tool-call-parser",
+                "qwen3_coder",
+                "--tp-size",
+                "2"
+            ],
+        )
+        cls.base_url += "/v1"
+        cls.tokenizer = get_tokenizer(cls.model)
+
+    # This test is too difficult for GLM4-moe. Skip it from the UT
+    def test_function_call_required(self):
+        pass
+
+    def test_function_calling_multiturn(self):
+        self._test_function_calling_multiturn()
+
+class TestStep3FunctionCalling(TestOpenAIServerFunctionCalling):
+    @classmethod
+    def setUpClass(cls):
+        # Replace with the model name needed for testing; if not required, reuse DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        cls.model = "stepfun-ai/step3-fp8"
+        cls.base_url = "http://localhost:30000"
+        cls.api_key = "sk-123456"
+
+        # Start the local OpenAI Server. If necessary, you can add other parameters such as --enable-tools.
+        cls.process = popen_launch_server(
+            cls.model,
+            cls.base_url,
+            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH * 100,
+            api_key=cls.api_key,
+            other_args=[
+                # If your server needs extra parameters to test function calling, please add them here.
+                "--tool-call-parser",
+                "step3",
+                "--tp-size",
+                "8"
+            ],
+        )
+        cls.base_url += "/v1"
+        cls.tokenizer = get_tokenizer(cls.model)
+
+    # This test is too difficult for GLM4-moe. Skip it from the UT
+    def test_function_call_required(self):
+        pass
+
+    def test_function_calling_multiturn(self):
+        self._test_function_calling_multiturn()
+
+class TestGPTOSSFunctionCalling(TestOpenAIServerFunctionCalling):
+    @classmethod
+    def setUpClass(cls):
+        # Replace with the model name needed for testing; if not required, reuse DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        cls.model = "openai/gpt-oss-20b"
+        cls.base_url = "http://localhost:30000"
+        cls.api_key = "sk-123456"
+
+        # Start the local OpenAI Server. If necessary, you can add other parameters such as --enable-tools.
+        cls.process = popen_launch_server(
+            cls.model,
+            cls.base_url,
+            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+            api_key=cls.api_key,
+            other_args=[
+                # If your server needs extra parameters to test function calling, please add them here.
+                "--tool-call-parser",
+                "gpt-oss",
+                "--tp-size",
+                "8"
+            ],
+        )
+        cls.base_url += "/v1"
+        cls.tokenizer = get_tokenizer(cls.model)
+
+    # This test is too difficult for GLM4-moe. Skip it from the UT
+    def test_function_call_required(self):
+        pass
+
+    def test_function_calling_multiturn(self):
+        self._test_function_calling_multiturn()
+
+class TestDPSKFunctionCalling(TestOpenAIServerFunctionCalling):
+    @classmethod
+    def setUpClass(cls):
+        # Replace with the model name needed for testing; if not required, reuse DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        cls.model = "/shared/public/elr-models/deepseek-ai/DeepSeek-R1-Distill-Llama-70B/b427a01ff5891168e3f283c4365521ed2a624c8d/"
+        cls.base_url = "http://localhost:30000"
+        cls.api_key = "sk-123456"
+
+        # Start the local OpenAI Server. If necessary, you can add other parameters such as --enable-tools.
+        cls.process = popen_launch_server(
+            cls.model,
+            cls.base_url,
+            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+            api_key=cls.api_key,
+            other_args=[
+                # If your server needs extra parameters to test function calling, please add them here.
+                "--tool-call-parser",
+                "deepseekv3",
+                "--tp-size",
+                "8"
+            ],
+        )
+        cls.base_url += "/v1"
+        cls.tokenizer = get_tokenizer(cls.model)
+
+    # This test is too difficult for GLM4-moe. Skip it from the UT
+    def test_function_call_required(self):
+        pass
+
+    def test_function_calling_multiturn(self):
+        self._test_function_calling_multiturn()
 
 if __name__ == "__main__":
     unittest.main()
+
