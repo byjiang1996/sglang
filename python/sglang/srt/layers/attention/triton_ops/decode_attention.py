@@ -672,7 +672,7 @@ def decode_attention_fwd_normal(
         sinks,
     )
 
-
+LAYER_ID = 0
 def decode_attention_fwd_grouped(
     q,
     k_buffer,
@@ -689,6 +689,23 @@ def decode_attention_fwd_grouped(
     sinks=None,
     xai_temperature_len=-1,
 ):
+    global LAYER_ID
+    # Log before attention output
+    batch_size = q.shape[0]
+    if batch_size > 1:
+        import torch
+        # print(k_buffer.shape, v_buffer.shape, kv_indices, kv_indptr)
+        assert torch.equal(q[0], q[1]), f"Q is not deterministic in layer {LAYER_ID}: {q[0]} != {q[1]}"
+        assert torch.equal(num_kv_splits[0], num_kv_splits[1]), f"num_kv_splits is not deterministic in layer {LAYER_ID}: {num_kv_splits[0]} != {num_kv_splits[1]}"
+        # assert torch.equal(k_buffer[kv_indices[0]], k_buffer[kv_indices[1]]), f"k_buffer is not deterministic in layer {LAYER_ID}: {k_buffer[kv_indices[0]]} != {k_buffer[kv_indices[1]]}"
+        # assert torch.equal(v_buffer[kv_indices[0]], v_buffer[kv_indices[1]]), f"v_buffer is not deterministic in layer {LAYER_ID}: {v_buffer[kv_indices[0]]} != {v_buffer[kv_indices[1]]}"
+        # # tp_rank = get_attention_tp_rank()
+        # log_file = f"/tmp/sglang-deterministic-logging/065-qwen3-after-attention-output-mode-2-tp-rank-???-batch-size-{batch_size}.txt"
+        # attn_logits_sample = attn_logits[:3, 0, 0, :5].detach().cpu().tolist()
+        # with open(log_file, "a") as f:
+        #     f.write(f"Layer: ???\n")
+        #     f.write(f"  AttnLogits[:3,:5]: {attn_logits_sample}\n")
+
     _decode_grouped_att_m_fwd(
         q,
         k_buffer,
@@ -703,6 +720,20 @@ def decode_attention_fwd_grouped(
         logit_cap,
         xai_temperature_len,
     )
+
+    # Log after attention output
+    batch_size = q.shape[0]
+    if batch_size > 1:
+        import torch
+        assert torch.equal(attn_logits[0], attn_logits[1]), f"Attn logits are not deterministic in layer {LAYER_ID}: {attn_logits[0]} != {attn_logits[1]}"
+        LAYER_ID += 1
+        # # tp_rank = get_attention_tp_rank()
+        # log_file = f"/tmp/sglang-deterministic-logging/065-qwen3-after-attention-output-mode-2-tp-rank-???-batch-size-{batch_size}.txt"
+        # attn_logits_sample = attn_logits[:3, 0, 0, :5].detach().cpu().tolist()
+        # with open(log_file, "a") as f:
+        #     f.write(f"Layer: ???\n")
+        #     f.write(f"  AttnLogits[:3,:5]: {attn_logits_sample}\n")
+
     _decode_softmax_reducev_fwd(
         attn_logits,
         attn_lse,

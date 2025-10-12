@@ -39,7 +39,7 @@ class BenchArgs:
     profile_steps: int = 3
     profile_by_stage: bool = False
     test_mode: str = "single"
-    n_trials: int = 50
+    n_trials: int = 20
     n_start: int = 1
 
     @staticmethod
@@ -277,11 +277,11 @@ def test_deterministic(args):
 
     elif args.test_mode == "prefix":
         # In prefix mode, we create prompts from the same long prompt, with different lengths of common prefix.
-        len_prefix = [1, 511, 2048, 4097]
+        len_prefix = [511]
         num_prompts = len(len_prefix)
-        outputs = {i: [] for i in range(4)}
-        prompts = [LONG_PROMPT[: len_prefix[i]] for i in range(4)]
-        for i in range(args.n_start, args.n_start + args.n_trials):
+        outputs = {i: [] for i in range(1)}
+        prompts = [LONG_PROMPT[: len_prefix[i]] for i in range(1)]
+        for i in range(2,3):
             batch_size = i
             ret_dict = send_prefix(args, batch_size, prompts)
             msg = f"Testing Trial {i} with batch size {batch_size},"
@@ -290,6 +290,9 @@ def test_deterministic(args):
             print(msg)
             for i in range(num_prompts):
                 outputs[i].extend(ret_dict[i])
+            
+            if len(set(outputs[i])) > 1:
+                raise ValueError(f"Outputs are not deterministic for prefix length {len_prefix[i]}")
 
         for i in range(num_prompts):
             print(

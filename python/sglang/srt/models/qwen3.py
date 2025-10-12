@@ -65,6 +65,7 @@ class Qwen3Attention(nn.Module):
         self.hidden_size = hidden_size
         self.tp_size = get_tensor_model_parallel_world_size()
         self.total_num_heads = num_heads
+        self.layer_id = layer_id
         attn_tp_rank = get_attention_tp_rank()
         attn_tp_size = get_attention_tp_size()
 
@@ -163,57 +164,62 @@ class Qwen3Attention(nn.Module):
 
         # Log after QKV split
         if forward_batch.forward_mode.is_decode() and forward_batch.batch_size > 0:
-            log_file = f"/data/sglang-deterministic-logging/04-qwen3-after-qkv-split-mode-{forward_batch.forward_mode}-tp-rank-{self.tp_rank}-batch-size-{forward_batch.batch_size}.txt"
-            q_sample = q[0, :5].detach().cpu().tolist()
-            k_sample = k[0, :5].detach().cpu().tolist()
-            v_sample = v[0, :5].detach().cpu().tolist()
-            with open(log_file, "a") as f:
-                f.write(f"Layer: {self.layer_id}\n")
-                f.write(f"  Q[0,:5]: {q_sample}\n")
-                f.write(f"  K[0,:5]: {k_sample}\n")
-                f.write(f"  V[0,:5]: {v_sample}\n")
+            assert torch.equal(q[0], q[1]) and torch.equal(k[0], k[1]) and torch.equal(v[0], v[1]), f"Q, K, and V are not deterministic in layer {self.layer_id}"
+            # log_file = f"/tmp/sglang-deterministic-logging/04-qwen3-after-qkv-split-mode-{forward_batch.forward_mode}-tp-rank-{self.tp_rank}-batch-size-{forward_batch.batch_size}.txt"
+            # q_sample = q[:3, :5].detach().cpu().tolist()
+            # k_sample = k[:3, :5].detach().cpu().tolist()
+            # v_sample = v[:3, :5].detach().cpu().tolist()
+            # with open(log_file, "a") as f:
+            #     f.write(f"Layer: {self.layer_id}\n")
+            #     f.write(f"  Q[:3,:5]: {q_sample}\n")
+            #     f.write(f"  K[:3,:5]: {k_sample}\n")
+            #     f.write(f"  V[:3,:5]: {v_sample}\n")
         q, k = self._apply_qk_norm(q, k)
 
         # Log after QKV split
         if forward_batch.forward_mode.is_decode() and forward_batch.batch_size > 0:
-            log_file = f"/data/sglang-deterministic-logging/05-qwen3-after-qkv-split-mode-{forward_batch.forward_mode}-tp-rank-{self.tp_rank}-batch-size-{forward_batch.batch_size}.txt"
-            q_sample = q[0, :5].detach().cpu().tolist()
-            k_sample = k[0, :5].detach().cpu().tolist()
-            v_sample = v[0, :5].detach().cpu().tolist()
-            with open(log_file, "a") as f:
-                f.write(f"Layer: {self.layer_id}\n")
-                f.write(f"  Q[0,:5]: {q_sample}\n")
-                f.write(f"  K[0,:5]: {k_sample}\n")
-                f.write(f"  V[0,:5]: {v_sample}\n")
+            assert torch.equal(q[0], q[1]) and torch.equal(k[0], k[1]) and torch.equal(v[0], v[1]), f"Q, K, and V are not deterministic in layer {self.layer_id}"
+            # log_file = f"/tmp/sglang-deterministic-logging/05-qwen3-after-qkv-split-mode-{forward_batch.forward_mode}-tp-rank-{self.tp_rank}-batch-size-{forward_batch.batch_size}.txt"
+            # q_sample = q[:3, :5].detach().cpu().tolist()
+            # k_sample = k[:3, :5].detach().cpu().tolist()
+            # v_sample = v[:3, :5].detach().cpu().tolist()
+            # with open(log_file, "a") as f:
+            #     f.write(f"Layer: {self.layer_id}\n")
+            #     f.write(f"  Q[:3,:5]: {q_sample}\n")
+            #     f.write(f"  K[:3,:5]: {k_sample}\n")
+            #     f.write(f"  V[:3,:5]: {v_sample}\n")
         q, k = self.rotary_emb(positions, q, k)
 
         # Log after rotary embedding
         if forward_batch.forward_mode.is_decode() and forward_batch.batch_size > 0:
-            log_file = f"/data/sglang-deterministic-logging/06-qwen3-after-rotary-embedding-mode-{forward_batch.forward_mode}-tp-rank-{self.tp_rank}-batch-size-{forward_batch.batch_size}.txt"
-            q_sample = q[0, :5].detach().cpu().tolist()
-            k_sample = k[0, :5].detach().cpu().tolist()
-            with open(log_file, "a") as f:
-                f.write(f"Layer: {self.layer_id}\n")
-                f.write(f"  Q[0,:5]: {q_sample}\n")
-                f.write(f"  K[0,:5]: {k_sample}\n")
+            assert torch.equal(q[0], q[1]) and torch.equal(k[0], k[1]), f"Q and K are not deterministic in layer {self.layer_id}"
+            # log_file = f"/tmp/sglang-deterministic-logging/06-qwen3-after-rotary-embedding-mode-{forward_batch.forward_mode}-tp-rank-{self.tp_rank}-batch-size-{forward_batch.batch_size}.txt"
+            # q_sample = q[:3, :5].detach().cpu().tolist()
+            # k_sample = k[:3, :5].detach().cpu().tolist()
+            # with open(log_file, "a") as f:
+            #     f.write(f"Layer: {self.layer_id}\n")
+            #     f.write(f"  Q[:3,:5]: {q_sample}\n")
+            #     f.write(f"  K[:3,:5]: {k_sample}\n")
         attn_output = self.attn(q, k, v, forward_batch)
 
         # Log after attention output
         if forward_batch.forward_mode.is_decode() and forward_batch.batch_size > 0:
-            log_file = f"/data/sglang-deterministic-logging/07-qwen3-after-attention-output-mode-{forward_batch.forward_mode}-tp-rank-{self.tp_rank}-batch-size-{forward_batch.batch_size}.txt"
-            attn_output_sample = attn_output[0, :5].detach().cpu().tolist()
-            with open(log_file, "a") as f:
-                f.write(f"Layer: {self.layer_id}\n")
-                f.write(f"  AttnOutput[0,:5]: {attn_output_sample}\n")
+            assert torch.equal(attn_output[0], attn_output[1]), f"Attn output are not deterministic in layer {self.layer_id}"
+            # log_file = f"/tmp/sglang-deterministic-logging/07-qwen3-after-attention-output-mode-{forward_batch.forward_mode}-tp-rank-{self.tp_rank}-batch-size-{forward_batch.batch_size}.txt"
+            # attn_output_sample = attn_output[:3, :5].detach().cpu().tolist()
+            # with open(log_file, "a") as f:
+            #     f.write(f"Layer: {self.layer_id}\n")
+            #     f.write(f"  AttnOutput[:3,:5]: {attn_output_sample}\n")
         output, _ = self.o_proj(attn_output)
 
         # Log after output projection
         if forward_batch.forward_mode.is_decode() and forward_batch.batch_size > 0:
-            log_file = f"/data/sglang-deterministic-logging/08-qwen3-after-output-projection-mode-{forward_batch.forward_mode}-tp-rank-{self.tp_rank}-batch-size-{forward_batch.batch_size}.txt"
-            output_sample = output[0, :5].detach().cpu().tolist()
-            with open(log_file, "a") as f:
-                f.write(f"Layer: {self.layer_id}\n")
-                f.write(f"  Output[0,:5]: {output_sample}\n")
+            assert torch.equal(output[0], output[1]), f"Output are not deterministic in layer {self.layer_id}"
+            # log_file = f"/tmp/sglang-deterministic-logging/08-qwen3-after-output-projection-mode-{forward_batch.forward_mode}-tp-rank-{self.tp_rank}-batch-size-{forward_batch.batch_size}.txt"
+            # output_sample = output[:3, :5].detach().cpu().tolist()
+            # with open(log_file, "a") as f:
+            #     f.write(f"Layer: {self.layer_id}\n")
+            #     f.write(f"  Output[:3,:5]: {output_sample}\n")
         return output
 
 
@@ -232,6 +238,8 @@ class Qwen3DecoderLayer(nn.Module):
         rope_scaling = getattr(config, "rope_scaling", None)
         max_position_embeddings = getattr(config, "max_position_embeddings", 32768)
         head_dim = getattr(config, "head_dim", None)
+        self.tp_size = get_tensor_model_parallel_world_size()
+        self.layer_id = layer_id
         self.self_attn = Qwen3Attention(
             hidden_size=self.hidden_size,
             num_heads=config.num_attention_heads,
@@ -282,18 +290,22 @@ class Qwen3DecoderLayer(nn.Module):
         batch_size = forward_batch.batch_size
 
         # Log input to layer (BEFORE layernorm)
-        if batch_size > 0:
-            log_file = f"/data/sglang-deterministic-logging/02-qwen3-layer-input-mode-{forward_batch.forward_mode}-tp-{self.tp_size}-batch-size-{batch_size}.txt"
-            first_hidden = hidden_states[0, :5].detach().cpu().tolist()
-            first_residual = (
-                residual[0, :5].detach().cpu().tolist()
-                if residual is not None
-                else "None"
-            )
-            with open(log_file, "a+") as f:
-                f.write(
-                    f"Batch Size: {batch_size}, Layer: {self.layer_id}, Hidden: {first_hidden}, Residual: {first_residual}\n"
-                )
+        if batch_size > 0 and forward_batch.forward_mode.is_decode():
+            if residual is not None:
+                assert torch.equal(hidden_states[0], hidden_states[1]) and torch.equal(residual[0], residual[1]), f"Hidden states and residual are not deterministic in layer {self.layer_id}: {hidden_states[0]} != {hidden_states[1]} or {residual[0]} != {residual[1]}"
+            else:
+                assert torch.equal(hidden_states[0], hidden_states[1]), f"Hidden states are not deterministic in layer {self.layer_id}: {hidden_states[0]} != {hidden_states[1]}"
+            # log_file = f"/tmp/sglang-deterministic-logging/02-qwen3-layer-input-mode-{forward_batch.forward_mode}-tp-{self.tp_size}-batch-size-{batch_size}.txt"
+            # first_hidden = hidden_states[:3, :5].detach().cpu().tolist()
+            # first_residual = (
+            #     residual[:3, :5].detach().cpu().tolist()
+            #     if residual is not None
+            #     else "None"
+            # )
+            # with open(log_file, "a+") as f:
+            #     f.write(
+            #         f"Batch Size: {batch_size}, Layer: {self.layer_id}, Hidden: {first_hidden}, Residual: {first_residual}\n"
+            #     )
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states, residual, forward_batch
         )
@@ -305,18 +317,22 @@ class Qwen3DecoderLayer(nn.Module):
             )
 
         # Log after self attention
-        if batch_size > 0:
-            log_file = f"/data/sglang-deterministic-logging/03-qwen3-layer-input-mode-{forward_batch.forward_mode}-tp-{self.tp_size}-batch-size-{batch_size}.txt"
-            first_hidden = hidden_states[0, :5].detach().cpu().tolist()
-            first_residual = (
-                residual[0, :5].detach().cpu().tolist()
-                if residual is not None
-                else "None"
-            )
-            with open(log_file, "a+") as f:
-                f.write(
-                    f"Batch Size: {batch_size}, Layer: {self.layer_id}, Hidden: {first_hidden}, Residual: {first_residual}\n"
-                )
+        if batch_size > 0 and forward_batch.forward_mode.is_decode():
+            if residual is not None:
+                assert torch.equal(hidden_states[0], hidden_states[1]) and torch.equal(residual[0], residual[1]), f"Hidden states and residual are not deterministic in layer {self.layer_id}"
+            else:
+                assert torch.equal(hidden_states[0], hidden_states[1]), f"Hidden states are not deterministic in layer {self.layer_id}"
+            # log_file = f"/tmp/sglang-deterministic-logging/03-qwen3-layer-input-mode-{forward_batch.forward_mode}-tp-{self.tp_size}-batch-size-{batch_size}.txt"
+            # first_hidden = hidden_states[:3, :5].detach().cpu().tolist()
+            # first_residual = (
+            #     residual[:3, :5].detach().cpu().tolist()
+            #     if residual is not None
+            #     else "None"
+            # )
+            # with open(log_file, "a+") as f:
+            #     f.write(
+            #         f"Batch Size: {batch_size}, Layer: {self.layer_id}, Hidden: {first_hidden}, Residual: {first_residual}\n"
+            #     )
         # Fully Connected
         hidden_states, residual = self.layer_communicator.prepare_mlp(
             hidden_states,
@@ -331,18 +347,22 @@ class Qwen3DecoderLayer(nn.Module):
         hidden_states = self.mlp(hidden_states)
 
         # Log after MLP
-        if batch_size > 0:
-            log_file = f"/data/sglang-deterministic-logging/04-qwen3-layer-input-mode-{forward_batch.forward_mode}-tp-{self.tp_size}-batch-size-{batch_size}.txt"
-            first_hidden = hidden_states[0, :5].detach().cpu().tolist()
-            first_residual = (
-                residual[0, :5].detach().cpu().tolist()
-                if residual is not None
-                else "None"
-            )
-            with open(log_file, "a+") as f:
-                f.write(
-                    f"Batch Size: {batch_size}, Layer: {self.layer_id}, Hidden: {first_hidden}, Residual: {first_residual}\n"
-                )
+        if batch_size > 0 and forward_batch.forward_mode.is_decode():
+            if residual is not None:
+                assert torch.equal(hidden_states[0], hidden_states[1]) and torch.equal(residual[0], residual[1]), f"Hidden states and residual are not deterministic in layer {self.layer_id}"
+            else:
+                assert torch.equal(hidden_states[0], hidden_states[1]), f"Hidden states are not deterministic in layer {self.layer_id}"
+            # log_file = f"/tmp/sglang-deterministic-logging/04-qwen3-layer-input-mode-{forward_batch.forward_mode}-tp-{self.tp_size}-batch-size-{batch_size}.txt"
+            # first_hidden = hidden_states[0, :5].detach().cpu().tolist()
+            # first_residual = (
+            #     residual[0, :5].detach().cpu().tolist()
+            #     if residual is not None
+            #     else "None"
+            # )
+            # with open(log_file, "a+") as f:
+            #     f.write(
+            #         f"Batch Size: {batch_size}, Layer: {self.layer_id}, Hidden: {first_hidden}, Residual: {first_residual}\n"
+            #     )
         if _is_npu and get_cmo_stream():
             wait_cmo_stream()
         hidden_states, residual = self.layer_communicator.postprocess_layer(
