@@ -338,6 +338,8 @@ class ModelRunner:
             for layer in self.model.model.layers:
                 if hasattr(layer, "self_attn") and hasattr(layer.self_attn, "attn"):
                     self.attention_layers.append(layer.self_attn.attn)
+                elif hasattr(layer, "linear_attn") and hasattr(layer.linear_attn, "attn"):
+                    self.attention_layers.append(layer.linear_attn.attn)
             if len(self.attention_layers) < self.model_config.num_hidden_layers:
                 # TODO(yuwei): support Non-Standard GQA
                 log_info_on_rank0(

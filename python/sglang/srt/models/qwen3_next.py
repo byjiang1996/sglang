@@ -190,12 +190,58 @@ def fused_qkvzba_split_reshape_cat(
     return mixed_qkv, z, b, a
 
 
+# g = -self.A_log.float().exp() * F.softplus(a.float() + self.dt_bias)
+@triton.jit
+def fused_gdn_gating_kernel(
+    g,
+    A_log,
+    a,
+    dt_bias,
+    seq_len,
+    NUM_HEADS: tl.constexpr,
+    beta: tl.constexpr,
+    threshold: tl.constexpr,
+    BLK_HEADS: tl.constexpr,
+):
+    i_b, i_s, i_d = tl.program_id(0), tl.program_id(1), tl.program_id(2)
+    head_off = i_d * BLK_HEADS + tl.arange(0, BLK_HEADS)
+    off = i_b * seq_len * NUM_HEADS + i_s * NUM_HEADS + head_off
+    mask = head_off < NUM_HEADS
+    blk_A_log = tl.load(A_log + head_off, mask=mask)
+    blk_a = tl.load(a + off, mask=mask)
+    blk_bias = tl.load(dt_bias + head_off, mask=mask)
+    x = blk_a.to(tl.float32) + blk_bias.to(tl.float32)
+    softplus_x = tl.where(
+        beta * x <= threshold, (1 / beta) * tl.log(1 + tl.exp(beta * x)), x
+    )
+    blk_g = -tl.exp(blk_A_log.to(tl.float32)) * softplus_x
+    tl.store(g + off, blk_g.to(g.dtype.element_ty), mask=mask)
+
+
+def fused_gdn_gating(
+    A_log: torch.Tensor,
+    a: torch.Tensor,
+    dt_bias: torch.Tensor,
+    beta: float = 1.0,
+    threshold: float = 20.0,
+) -> torch.Tensor:
+    batch, num_heads = a.shape
+    seq_len = 1
+    grid = (batch, seq_len, triton.cdiv(num_heads, 8))
+    g = torch.empty_like(a, dtype=torch.float32)
+    fused_gdn_gating_kernel[grid](
+        g, A_log, a, dt_bias, seq_len, num_heads, beta, threshold, 8, num_warps=1
+    )
+    return g
+
+
 class Qwen3GatedDeltaNet(nn.Module):
     def __init__(
         self,
         config: Qwen3NextConfig,
         layer_id: int,
         quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
         alt_stream: Optional[torch.cuda.Stream] = None,
     ) -> None:
         super().__init__()
@@ -210,6 +256,7 @@ class Qwen3GatedDeltaNet(nn.Module):
         self.key_dim = self.head_k_dim * self.num_k_heads
         self.value_dim = self.head_v_dim * self.num_v_heads
         self.alt_stream = alt_stream
+        self.scaling = self.head_k_dim**-0.5
 
         self.conv_kernel_size = config.linear_conv_kernel_dim
         self.layer_id = layer_id
@@ -300,6 +347,16 @@ class Qwen3GatedDeltaNet(nn.Module):
             reduce_results=False,
             tp_rank=self.attn_tp_rank,
             tp_size=self.attn_tp_size,
+        )
+
+        self.attn = RadixAttention(
+            self.num_k_heads // self.attn_tp_size,
+            self.head_k_dim,
+            self.scaling,
+            num_kv_heads=self.num_v_heads // self.attn_tp_size,
+            layer_id=layer_id,
+            v_head_dim=self.head_v_dim,
+            prefix=f"{prefix}.attn",
         )
 
     def fix_query_key_value_ordering(self, mixed_qkvz, mixed_ba):
@@ -420,11 +477,11 @@ class Qwen3GatedDeltaNet(nn.Module):
             "z": z,
         }
 
-        core_attn_out = forward_batch.attn_backend.forward(
+        core_attn_out = self.attn(
             q=None,
             k=None,
             v=None,
-            layer=None,
+            # layer=None,
             forward_batch=forward_batch,
             **kwargs,
         )
@@ -461,7 +518,7 @@ class Qwen3HybridLinearDecoderLayer(nn.Module):
         super().__init__()
         self.config = config
         self.linear_attn = Qwen3GatedDeltaNet(
-            config, layer_id, quant_config, alt_stream
+            config, layer_id, quant_config, prefix, alt_stream
         )
 
         # Qwen3Next all layers are sparse and have no nextn now
@@ -536,7 +593,8 @@ class Qwen3HybridLinearDecoderLayer(nn.Module):
         return hidden_states, residual
 
 
-class Qwen3HybridAttentionDecoderLayer(nn.Module):
+class Qwen3Attention(nn.Module):
+    """Dedicated attention module for Qwen3 hybrid attention."""
 
     def __init__(
         self,
@@ -619,46 +677,8 @@ class Qwen3HybridAttentionDecoderLayer(nn.Module):
             prefix=f"{prefix}.attn",
         )
 
-        # Qwen3Next all layers are sparse and have no nextn now
-        self.is_layer_sparse = True
-        is_previous_layer_sparse = True
-
-        self.layer_scatter_modes = LayerScatterModes.init_new(
-            layer_id=layer_id,
-            num_layers=config.num_hidden_layers,
-            is_layer_sparse=self.is_layer_sparse,
-            is_previous_layer_sparse=is_previous_layer_sparse,
-        )
-
-        if self.is_layer_sparse:
-            self.mlp = Qwen2MoeSparseMoeBlock(
-                layer_id=layer_id,
-                config=config,
-                quant_config=quant_config,
-                alt_stream=alt_stream,
-                prefix=add_prefix("mlp", prefix),
-            )
-        else:
-            self.mlp = Qwen2MoeMLP(
-                hidden_size=config.hidden_size,
-                intermediate_size=config.intermediate_size,
-                hidden_act=config.hidden_act,
-                quant_config=quant_config,
-            )
-        self.input_layernorm = GemmaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = GemmaRMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
-        )
-
         self.q_norm = GemmaRMSNorm(self.head_dim, eps=config.rms_norm_eps)
         self.k_norm = GemmaRMSNorm(self.head_dim, eps=config.rms_norm_eps)
-
-        self.layer_communicator = LayerCommunicator(
-            layer_scatter_modes=self.layer_scatter_modes,
-            input_layernorm=self.input_layernorm,
-            post_attention_layernorm=self.post_attention_layernorm,
-            allow_reduce_scatter=True,
-        )
 
         self.alt_stream = alt_stream
 
@@ -684,7 +704,7 @@ class Qwen3HybridAttentionDecoderLayer(nn.Module):
         k = k_by_head.view(k.shape)
         return q, k
 
-    def self_attention(
+    def forward(
         self,
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
@@ -717,6 +737,63 @@ class Qwen3HybridAttentionDecoderLayer(nn.Module):
         output, _ = self.o_proj(attn_output)
         return output
 
+
+class Qwen3HybridAttentionDecoderLayer(nn.Module):
+
+    def __init__(
+        self,
+        config: Qwen3NextConfig,
+        layer_id: int,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+        alt_stream: Optional[torch.cuda.Stream] = None,
+    ) -> None:
+        super().__init__()
+        self.config = config
+        self.layer_id = layer_id
+
+        self.self_attn = Qwen3Attention(
+            config, layer_id, quant_config, prefix, alt_stream
+        )
+
+        # Qwen3Next all layers are sparse and have no nextn now
+        self.is_layer_sparse = True
+        is_previous_layer_sparse = True
+
+        self.layer_scatter_modes = LayerScatterModes.init_new(
+            layer_id=layer_id,
+            num_layers=config.num_hidden_layers,
+            is_layer_sparse=self.is_layer_sparse,
+            is_previous_layer_sparse=is_previous_layer_sparse,
+        )
+
+        if self.is_layer_sparse:
+            self.mlp = Qwen2MoeSparseMoeBlock(
+                layer_id=layer_id,
+                config=config,
+                quant_config=quant_config,
+                alt_stream=alt_stream,
+                prefix=add_prefix("mlp", prefix),
+            )
+        else:
+            self.mlp = Qwen2MoeMLP(
+                hidden_size=config.hidden_size,
+                intermediate_size=config.intermediate_size,
+                hidden_act=config.hidden_act,
+                quant_config=quant_config,
+            )
+        self.input_layernorm = GemmaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = GemmaRMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps
+        )
+
+        self.layer_communicator = LayerCommunicator(
+            layer_scatter_modes=self.layer_scatter_modes,
+            input_layernorm=self.input_layernorm,
+            post_attention_layernorm=self.post_attention_layernorm,
+            allow_reduce_scatter=True,
+        )
+
     def forward(
         self,
         positions: torch.Tensor,
@@ -730,7 +807,7 @@ class Qwen3HybridAttentionDecoderLayer(nn.Module):
         )
 
         if not forward_batch.forward_mode.is_idle():
-            hidden_states = self.self_attention(
+            hidden_states = self.self_attn(
                 positions=positions,
                 hidden_states=hidden_states,
                 forward_batch=forward_batch,
@@ -950,7 +1027,26 @@ class Qwen3NextForCausalLM(nn.Module):
             if "rotary_emb.inv_freq" in name:
                 continue
 
-            if ".self_attn." in name:
+            # Map attention weights to self_attn submodule (for Qwen3Attention)
+            # These weights are now in the Qwen3Attention module for attention layers
+            # Include both stacked (qkv_proj) and pre-stacked (q_proj, k_proj, v_proj) names
+            attention_weight_names = [
+                "q_norm", "k_norm", "qkv_proj", "q_proj", "k_proj", "v_proj", 
+                "o_proj", "rotary_emb"
+            ]
+            if any(f".{attn_name}." in name for attn_name in attention_weight_names):
+                # Check if this is an attention layer (not linear_attention)
+                if "layers." in name and ".self_attn." not in name:
+                    parts = name.split(".")
+                    for i, part in enumerate(parts):
+                        if part in attention_weight_names:
+                            # Insert self_attn before the attention weight name
+                            parts.insert(i, "self_attn")
+                            break
+                    name = ".".join(parts)
+            elif ".self_attn." in name:
+                # Other weights that have .self_attn. should have it removed
+                # (for backwards compatibility with old checkpoint format)
                 name = name.replace(".self_attn", "")
 
             for param_name, weight_name, shard_id in stacked_params_mapping:
