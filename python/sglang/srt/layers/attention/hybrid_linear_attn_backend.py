@@ -505,6 +505,7 @@ class KimiLinearAttnBackend(MambaAttnBackendBase):
             beta=beta,
             initial_state=initial_state,
             output_final_state=True,
+            has_initial_states=has_initial_state,
             use_qk_l2norm_in_kernel=True,
             cu_seqlens=query_start_loc,
         )
@@ -716,6 +717,7 @@ class GDNAttnBackend(MambaAttnBackendBase):
                 g=g,
                 beta=beta,
                 initial_state=recurrent_state,
+                has_initial_states=has_initial_states,
                 output_final_state=True,
                 cu_seqlens=query_start_loc,
                 head_first=False,

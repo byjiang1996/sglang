@@ -302,17 +302,13 @@ class MambaPool:
         if free_index.numel() == 0:
             return
         self.free_slots = torch.cat((self.free_slots, free_index))
-        if self.is_kda_cache:
-            for i in range(len(self.mamba_cache.conv)):
-                self.mamba_cache.conv[i][:, free_index] = 0
-        else:
-            self.mamba_cache.conv[:, free_index] = 0
-        self.mamba_cache.temporal[:, free_index] = 0
         if isinstance(self.mamba_cache, MambaPool.SpeculativeState):
             self.mamba_cache.last_steps[free_index] = 0
 
     def clear(self):
         self.free_slots = torch.arange(self.size, dtype=torch.int64, device=self.device)
+        if isinstance(self.mamba_cache, MambaPool.SpeculativeState):
+            self.mamba_cache.last_steps[:] = 0
 
     def copy_from(self, src_index: torch.Tensor, dst_index: torch.Tensor):
         if self.is_kda_cache:

@@ -4,6 +4,7 @@
 # the following copyright notice:
 # Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
+from typing import Optional
 import torch
 import torch.nn as nn
 import triton
@@ -1156,6 +1157,7 @@ def chunk_kda_fwd(
     scale: float,
     initial_state: torch.Tensor,
     output_final_state: bool,
+    has_initial_states: Optional[torch.Tensor] = None,
     cu_seqlens: torch.LongTensor | None = None,
 ):
     chunk_size = 64
@@ -1188,6 +1190,7 @@ def chunk_kda_fwd(
         gk=g,
         initial_state=initial_state,
         output_final_state=output_final_state,
+        has_initial_states=has_initial_states,
         cu_seqlens=cu_seqlens,
     )
     del w, u, kg
@@ -1215,6 +1218,7 @@ def chunk_kda(
     scale: float = None,
     initial_state: torch.Tensor = None,
     output_final_state: bool = False,
+    has_initial_states: Optional[torch.Tensor] = None,
     use_qk_l2norm_in_kernel: bool = False,
     cu_seqlens: torch.LongTensor | None = None,
     **kwargs,
@@ -1235,6 +1239,7 @@ def chunk_kda(
         scale=scale,
         initial_state=initial_state.contiguous(),
         output_final_state=output_final_state,
+        has_initial_states=has_initial_states,
         cu_seqlens=cu_seqlens,
     )
     return o, final_state

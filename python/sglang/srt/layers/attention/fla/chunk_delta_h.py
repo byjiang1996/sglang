@@ -23,6 +23,7 @@ NUM_WARPS = [2, 4] if is_nvidia_hopper else [2, 4, 8, 16]
         "USE_G": lambda args: args["g"] is not None,
         "USE_GK": lambda args: args["gk"] is not None,
         "USE_INITIAL_STATE": lambda args: args["h0"] is not None,
+        "HAS_INITIAL_STATE": lambda args: args["has_initial_states_ptr"] is not None,
         "STORE_FINAL_STATE": lambda args: args["ht"] is not None,
         "SAVE_NEW_VALUE": lambda args: args["v_new"] is not None,
         "IS_VARLEN": lambda args: args["cu_seqlens"] is not None,
@@ -48,6 +49,7 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
     gk,
     h,
     h0,
+    has_initial_states_ptr,
     ht,
     cu_seqlens,
     chunk_offsets,
@@ -61,6 +63,7 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
     USE_G: tl.constexpr,
     USE_GK: tl.constexpr,
     USE_INITIAL_STATE: tl.constexpr,
+    HAS_INITIAL_STATE: tl.constexpr,
     STORE_FINAL_STATE: tl.constexpr,
     SAVE_NEW_VALUE: tl.constexpr,
     IS_VARLEN: tl.constexpr,
@@ -78,6 +81,10 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
         bos, eos = i_n * T, i_n * T + T
         NT = tl.cdiv(T, BT)
         boh = i_n * NT
+
+    load_init_state = USE_INITIAL_STATE
+    if USE_INITIAL_STATE and HAS_INITIAL_STATE:
+        load_init_state = tl.load(has_initial_states_ptr + i_n).to(tl.int1)
 
     # [BK, BV]
     b_h1 = tl.zeros([64, BV], dtype=tl.float32)
@@ -99,13 +106,13 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
     stride_h = H * K * V
     stride_k = Hg * K
     stride_w = H * K
-    if USE_INITIAL_STATE:
+    if load_init_state:
         h0 = h0 + i_nh * K * V
     if STORE_FINAL_STATE:
         ht = ht + i_nh * K * V
 
     # load initial state
-    if USE_INITIAL_STATE:
+    if load_init_state:
         p_h0_1 = tl.make_block_ptr(h0, (K, V), (V, 1), (0, i_v * BV), (64, BV), (1, 0))
         b_h1 += tl.load(p_h0_1, boundary_check=(0, 1)).to(tl.float32)
         if K > 64:
@@ -283,6 +290,7 @@ def chunk_gated_delta_rule_fwd_h(
     g: Optional[torch.Tensor] = None,
     gk: Optional[torch.Tensor] = None,
     initial_state: Optional[torch.Tensor] = None,
+    has_initial_states: Optional[torch.Tensor] = None,
     output_final_state: bool = False,
     chunk_size: int = 64,  # SY: remove this argument and force chunk size 64?
     save_new_value: bool = True,
@@ -327,6 +335,7 @@ def chunk_gated_delta_rule_fwd_h(
         gk=gk,
         h=h,
         h0=initial_state,
+        has_initial_states_ptr=has_initial_states,
         ht=final_state,
         cu_seqlens=cu_seqlens,
         chunk_offsets=chunk_offsets,
