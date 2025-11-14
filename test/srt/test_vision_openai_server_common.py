@@ -17,11 +17,11 @@ from sglang.test.test_utils import (
 )
 
 # image
-IMAGE_MAN_IRONING_URL = "https://raw.githubusercontent.com/sgl-project/sgl-test-files/refs/heads/main/images/man_ironing_on_back_of_suv.png"
-IMAGE_SGL_LOGO_URL = "https://raw.githubusercontent.com/sgl-project/sgl-test-files/refs/heads/main/images/sgl_logo.png"
+IMAGE_MAN_IRONING_URL = "/home/jobuser/sglang/man_ironing_on_back_of_suv.png"
+IMAGE_SGL_LOGO_URL = "/home/jobuser/sglang/sgl_logo.png"
 
 # video
-VIDEO_JOBS_URL = "https://raw.githubusercontent.com/sgl-project/sgl-test-files/refs/heads/main/videos/jobs_presenting_ipod.mp4"
+VIDEO_JOBS_URL = "/home/jobuser/sglang/jobs_presenting_ipod.mp4"
 
 # audio
 AUDIO_TRUMP_SPEECH_URL = "https://raw.githubusercontent.com/sgl-project/sgl-test-files/refs/heads/main/audios/Trump_WEF_2018_10s.mp3"
@@ -36,19 +36,19 @@ class TestOpenAIMLLMServerBase(CustomTestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.base_url = DEFAULT_URL_FOR_TEST
+        cls.base_url = "http://localhost:30000"
         cls.api_key = "sk-123456"
-        cls.process = popen_launch_server(
-            cls.model,
-            cls.base_url,
-            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-            api_key=cls.api_key,
-            other_args=(
-                cls.extra_args + cls.fixed_args + ["--trust-remote-code"]
-                if cls.trust_remote_code
-                else []
-            ),
-        )
+        # cls.process = popen_launch_server(
+        #     cls.model,
+        #     cls.base_url,
+        #     timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+        #     api_key=cls.api_key,
+        #     other_args=(
+        #         cls.extra_args + cls.fixed_args + ["--trust-remote-code"]
+        #         if cls.trust_remote_code
+        #         else []
+        #     ),
+        # )
         cls.base_url += "/v1"
 
     @classmethod
@@ -414,7 +414,7 @@ class ImageOpenAITestMixin(TestOpenAIMLLMServerBase):
 
     def test_video_images_chat_completion(self):
         url = VIDEO_JOBS_URL
-        file_path = self.get_or_download_file(url)
+        file_path = url
 
         client = openai.Client(api_key=self.api_key, base_url=self.base_url)
 
@@ -492,7 +492,7 @@ class VideoOpenAITestMixin(TestOpenAIMLLMServerBase):
 
     def test_video_chat_completion(self):
         url = VIDEO_JOBS_URL
-        file_path = self.get_or_download_file(url)
+        file_path = url
 
         client = openai.Client(api_key=self.api_key, base_url=self.base_url)
 
