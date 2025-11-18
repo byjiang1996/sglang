@@ -91,19 +91,10 @@ class Glm4vImageProcessor(SGLangBaseProcessor):
             multimodal_tokens=self.mm_tokens,
         )
 
-        video_metadata = None
-
         if base_output.videos:
-            videos_processed = [
-                await self.preprocess_video(video) for video in base_output.videos
-            ]
-            base_output.videos, video_metadata = map(list, zip(*videos_processed))
-            # transformer requires the video inputs to be under this format
-            base_output.videos = [base_output.videos]
-            video_metadata = [video_metadata]
-
+            base_output.videos = request_obj.video_data
         mm_items, input_ids, ret = self.process_and_combine_mm_data(
-            base_output, self.mm_tokens, video_metadata=video_metadata
+            base_output, self.mm_tokens
         )
 
         input_ids = input_ids.flatten()

@@ -266,27 +266,21 @@ class QwenVLImageProcessor(SGLangBaseProcessor):
         load_time = time.perf_counter()
         rid = getattr(request_obj, "rid", "anonymous_rid")
 
-        video_metadata = None
+        # video_metadata = None
+        # if base_output.videos:
+        #     videos_processed = [
+        #         await preprocess_video(video) for video in base_output.videos
+        #     ]
+        #     base_output.videos, video_metadata = map(list, zip(*videos_processed))
+
         if base_output.videos:
-            videos_processed = [
-                await preprocess_video(video) for video in base_output.videos
-            ]
-            base_output.videos, video_metadata = map(list, zip(*videos_processed))
+            base_output.videos = request_obj.video_data
 
         preprocess_time = time.perf_counter()
 
-        # NOTE: for qwen3-vl, video_meta need to be passed in, since do_sample_frames is already done in preprocess_video
-        if self.hf_config.model_type in ("qwen3_vl", "qwen3_vl_moe"):
-            mm_items, input_ids, ret = self.process_and_combine_mm_data(
-                base_output,
-                self.mm_tokens,
-                video_metadata=video_metadata,
-                do_sample_frames=False,
-            )
-        else:
-            mm_items, input_ids, ret = self.process_and_combine_mm_data(
-                base_output, self.mm_tokens
-            )
+        mm_items, input_ids, ret = self.process_and_combine_mm_data(
+            base_output, self.mm_tokens
+        )
 
         audio_feature_lengths = None
 
