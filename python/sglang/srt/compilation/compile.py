@@ -89,6 +89,10 @@ class _MaybeIntermediateTensors:
 def _mark_dynamic_on_value(val, dims):
     if isinstance(val, torch.Tensor):
         torch._dynamo.mark_dynamic(val, _normalize_dims(dims, val.ndim))
+    # Note: isinstance(val, ForwardBatch) won't work
+    elif type(val).__name__ == 'ForwardBatch':
+        torch._dynamo.mark_dynamic(val.dp_local_dp_buffer, _normalize_dims(dims, val.dp_local_dp_buffer.ndim))
+        torch._dynamo.mark_dynamic(val.dp_global_dp_buffer, _normalize_dims(dims, val.dp_global_dp_buffer.ndim))
     else:
         mit = _MaybeIntermediateTensors(val)
         if mit.is_intermediate:
@@ -115,6 +119,8 @@ def _infer_dynamic_arg_dims_from_annotations(forward_fn):
             dyn[name] = 0
         elif ann == "torch.Tensor" or ann == "Optional[torch.Tensor]":
             # For future import annotations (e.g. from __future__ import annotations), the annotation is a string
+            dyn[name] = 0
+        elif getattr(ann, "__name__", None) == "ForwardBatch":
             dyn[name] = 0
     if not dyn:
         raise ValueError("No dynamic dims inferred; pass dynamic_arg_dims explicitly.")
@@ -179,11 +185,19 @@ def install_torch_compiled(
         sig = inspect.signature(unbound_fwd)
         ba = sig.bind(self, *args, **kwargs)
         ba.apply_defaults()
+        # from sglang.srt.layers.dp_attention import (
+        #     get_global_dp_buffer,
+        #     get_local_dp_buffer,
+        # )
         for name, dims in (dyn_map or {}).items():
             if name in ba.arguments:
                 val = ba.arguments[name]
                 if val is not None:
+                    print(name)
                     _mark_dynamic_on_value(val, dims)
+                    # _mark_dynamic_on_value(get_local_dp_buffer(), dims)
+                    # _mark_dynamic_on_value(get_global_dp_buffer(), dims)
+        
 
         # Avoid cross-instance cache reuse
         torch._dynamo.eval_frame.remove_from_cache(unbound_fwd.__code__)

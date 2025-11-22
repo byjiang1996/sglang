@@ -49,6 +49,8 @@ from sglang.srt.layers.dp_attention import (
     get_attention_dp_rank,
     get_attention_tp_size,
     set_dp_buffer_len,
+    get_local_dp_buffer,
+    get_global_dp_buffer,
     set_is_extend_in_batch,
 )
 from sglang.srt.utils import get_compiler_backend, is_npu, support_triton
@@ -322,6 +324,8 @@ class ForwardBatch:
     # this will be recomputed in LogitsMetadata.from_forward_batch
     dp_local_start_pos: Optional[torch.Tensor] = None  # cached info at runtime
     dp_local_num_tokens: Optional[torch.Tensor] = None  # cached info at runtime
+    dp_local_dp_buffer: Optional[torch.Tensor] = None
+    dp_global_dp_buffer: Optional[torch.Tensor] = None
     global_dp_buffer_len: Optional[int] = None
     is_extend_in_batch: bool = False
     can_run_dp_cuda_graph: bool = False
@@ -758,6 +762,8 @@ class ForwardBatch:
         set_dp_buffer_len(
             buffer_len, num_tokens, dp_padding_mode.is_max_len(), global_num_tokens
         )
+        self.dp_local_dp_buffer = get_local_dp_buffer()
+        self.dp_global_dp_buffer = get_global_dp_buffer()
         set_is_extend_in_batch(self.is_extend_in_batch)
 
         bs = self.batch_size

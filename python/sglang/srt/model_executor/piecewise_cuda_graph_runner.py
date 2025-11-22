@@ -14,7 +14,12 @@
 """Run the model with cuda graph and torch.compile."""
 
 from __future__ import annotations
-
+from sglang.srt.distributed.device_communicators.pynccl_allocator import (
+    use_symmetric_memory,
+)
+from sglang.srt.distributed import (
+    get_tp_group,
+)
 import bisect
 import gc
 import logging
@@ -52,6 +57,19 @@ from sglang.srt.model_executor.forward_batch_info import (
 )
 from sglang.srt.two_batch_overlap import TboCudaGraphRunnerPlugin
 from sglang.srt.utils import get_available_gpu_memory, log_info_on_rank0
+
+from sglang.srt.utils import (
+    require_attn_tp_gather,
+    require_gathered_buffer,
+    require_mlp_sync,
+    require_mlp_tp_gather,
+)
+
+from sglang.srt.layers.dp_attention import (
+    _DpGatheredBufferWrapper,
+    get_local_dp_buffer,
+    get_global_dp_buffer
+)
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +207,12 @@ class PiecewiseCudaGraphRunner:
 
         self.use_input_embeds = model_runner.is_multimodal
 
+
+        self.require_gathered_buffer = require_gathered_buffer(model_runner.server_args)
+        self.require_mlp_tp_gather = require_mlp_tp_gather(model_runner.server_args)
+        self.require_mlp_sync = require_mlp_sync(model_runner.server_args)
+        self.require_attn_tp_gather = require_attn_tp_gather(model_runner.server_args)
+
         # Graph inputs
         with torch.device(self.device):
             self.input_ids = torch.zeros((self.max_num_tokens,), dtype=torch.int64)
@@ -207,6 +231,35 @@ class PiecewiseCudaGraphRunner:
                 (3, self.max_num_tokens), dtype=torch.int64
             )
             self.tbo_plugin = TboCudaGraphRunnerPlugin()
+
+            if self.require_gathered_buffer:
+                if self.require_mlp_tp_gather:
+                    self.global_num_tokens_gpu = torch.zeros(
+                        (self.dp_size,), dtype=torch.int32
+                    )
+                    self.global_num_tokens_for_logprob_gpu = torch.zeros(
+                        (self.dp_size,), dtype=torch.int32
+                    )
+                    self.global_dp_buffer_len = self.max_num_tokens * self.dp_size
+                else:
+                    assert self.require_attn_tp_gather
+                    self.global_num_tokens_gpu = torch.zeros((1,), dtype=torch.int32)
+                    self.global_num_tokens_for_logprob_gpu = torch.zeros(
+                        (1,), dtype=torch.int32
+                    )
+                    self.global_dp_buffer_len = self.max_num_tokens
+            else:
+                self.global_num_tokens_gpu = None
+                self.global_num_tokens_for_logprob_gpu = None
+                self.global_dp_buffer_len = None
+
+            set_dp_buffer_len(
+                self.global_dp_buffer_len,
+                self.max_num_tokens,
+                True, # TODO: fix me
+            )
+            self.dp_local_dp_buffer = get_local_dp_buffer()
+            self.dp_global_dp_buffer = get_global_dp_buffer()
 
         self.attention_layers = self.model_runner.attention_layers
 
@@ -243,6 +296,9 @@ class PiecewiseCudaGraphRunner:
     def warmup_torch_compile(self):
         """Warmup the model with a simple forward pass before CUDA graph capture."""
         num_tokens = 2
+        global_dp_buffer_len = None
+        if self.global_dp_buffer_len is not None:
+            global_dp_buffer_len = self.global_dp_buffer_len * num_tokens // self.max_num_tokens
         with torch.device(self.device):
             forward_batch = ForwardBatch(
                 forward_mode=ForwardMode.EXTEND,
@@ -287,10 +343,10 @@ class PiecewiseCudaGraphRunner:
                 extend_seq_lens_cpu=torch.tensor([num_tokens]),
                 extend_logprob_start_lens_cpu=torch.tensor([num_tokens]),
                 positions=torch.arange(num_tokens, device=self.device),
-                global_num_tokens_gpu=None,
-                global_num_tokens_for_logprob_gpu=None,
+                global_num_tokens_gpu=self.global_num_tokens_gpu,
+                global_num_tokens_for_logprob_gpu=self.global_num_tokens_for_logprob_gpu,
                 dp_padding_mode=DpPaddingMode.get_default_mode_in_cuda_graph(),
-                global_dp_buffer_len=None,
+                global_dp_buffer_len=global_dp_buffer_len,
                 mrope_positions=self.mrope_positions[:, :num_tokens],
                 spec_algorithm=None,
                 spec_info=None,
@@ -298,6 +354,8 @@ class PiecewiseCudaGraphRunner:
                 num_token_non_padded=None,
                 global_forward_mode=ForwardMode.EXTEND,
                 lora_ids=None,
+                dp_local_dp_buffer=self.dp_local_dp_buffer[:num_tokens],
+                dp_global_dp_buffer=self.dp_global_dp_buffer[:global_dp_buffer_len]
             )
 
         # Attention backend
@@ -386,8 +444,6 @@ class PiecewiseCudaGraphRunner:
                 {k: v[:num_tokens] for k, v in self.pp_proxy_tensors.items()}
             )
 
-        global_dp_buffer_len = None
-
         if self.model_runner.server_args.enable_lora:
             # It is safe to capture CUDA graph using empty LoRA id, as the LoRA kernels will always be launched whenever
             # `--enable-lora` is set to True (and return immediately if the LoRA id is empty for perf optimization).
@@ -395,6 +451,9 @@ class PiecewiseCudaGraphRunner:
         else:
             lora_ids = None
 
+        global_dp_buffer_len = None
+        if self.global_dp_buffer_len is not None:
+            global_dp_buffer_len = self.global_dp_buffer_len * num_tokens // self.max_num_tokens
         with torch.device(self.device):
             forward_batch = ForwardBatch(
                 forward_mode=ForwardMode.EXTEND,
@@ -422,10 +481,10 @@ class PiecewiseCudaGraphRunner:
                 extend_seq_lens_cpu=torch.tensor([num_tokens]),
                 extend_logprob_start_lens_cpu=torch.tensor([num_tokens]),
                 positions=positions,
-                global_num_tokens_gpu=None,
-                global_num_tokens_for_logprob_gpu=None,
+                global_num_tokens_gpu=self.global_num_tokens_gpu,
+                global_num_tokens_for_logprob_gpu=self.global_num_tokens_for_logprob_gpu,
                 dp_padding_mode=DpPaddingMode.get_default_mode_in_cuda_graph(),
-                global_dp_buffer_len=None,
+                global_dp_buffer_len=global_dp_buffer_len,
                 mrope_positions=mrope_positions,
                 spec_algorithm=None,
                 spec_info=None,
@@ -433,6 +492,8 @@ class PiecewiseCudaGraphRunner:
                 num_token_non_padded=None,
                 global_forward_mode=ForwardMode.EXTEND,
                 lora_ids=None,
+                dp_local_dp_buffer=self.dp_local_dp_buffer[:num_tokens],
+                dp_global_dp_buffer=self.dp_global_dp_buffer[:global_dp_buffer_len]
             )
             self.tbo_plugin.capture_one_batch_size(forward_batch, num_tokens=num_tokens)
 
@@ -445,11 +506,6 @@ class PiecewiseCudaGraphRunner:
         def run_once():
             # Clean intermediate result cache for DP attention
             forward_batch.dp_local_start_pos = forward_batch.dp_local_num_tokens = None
-            set_dp_buffer_len(
-                global_dp_buffer_len,
-                num_tokens,
-                forward_batch.dp_padding_mode.is_max_len(),
-            )
             # FIXME: the implementation is hacky. `is_extend_in_batch`` is for determining the deepep mode.
             # It is True in this context but we need to set it to use low latency deepep mode.
             set_is_extend_in_batch(False)
@@ -575,7 +631,11 @@ class PiecewiseCudaGraphRunner:
             temperature=forward_batch.temperature,
             top_p_normalized_logprobs=forward_batch.top_p_normalized_logprobs,
             top_p=forward_batch.top_p,
+            dp_local_dp_buffer=self.dp_local_dp_buffer[:static_num_tokens],
+            dp_global_dp_buffer=self.dp_global_dp_buffer[:forward_batch.global_dp_buffer_len]
         )
+
+        print(static_forward_batch.dp_local_dp_buffer.shape, static_forward_batch.dp_global_dp_buffer.shape)
 
         return static_forward_batch
 

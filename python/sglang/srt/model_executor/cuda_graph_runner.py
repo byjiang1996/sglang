@@ -45,6 +45,8 @@ from sglang.srt.layers.dp_attention import (
     get_attention_tp_rank,
     get_attention_tp_size,
     set_dp_buffer_len,
+    get_local_dp_buffer,
+    get_global_dp_buffer,
     set_is_extend_in_batch,
 )
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
@@ -378,6 +380,15 @@ class CudaGraphRunner:
             else:
                 self.global_num_tokens_gpu = None
                 self.global_num_tokens_for_logprob_gpu = None
+            
+            self.global_dp_buffer_len = self.max_num_token * self.dp_size
+            set_dp_buffer_len(
+                self.global_dp_buffer_len,
+                self.max_num_token,
+                True, # TODO: fix me
+            )
+            self.dp_local_dp_buffer = get_local_dp_buffer()
+            self.dp_global_dp_buffer = get_global_dp_buffer()
 
             self.custom_mask = torch.ones(
                 (
@@ -694,6 +705,8 @@ class CudaGraphRunner:
             num_token_non_padded=self.num_token_non_padded,
             global_forward_mode=self.capture_forward_mode,
             lora_ids=lora_ids,
+            dp_local_dp_buffer=self.dp_local_dp_buffer[:num_tokens],
+            dp_global_dp_buffer=self.dp_global_dp_buffer[:global_dp_buffer_len]
         )
         self.tbo_plugin.capture_one_batch_size(forward_batch, num_tokens=num_tokens)
 
@@ -715,11 +728,11 @@ class CudaGraphRunner:
         def run_once():
             # Clean intermediate result cache for DP attention
             forward_batch.dp_local_start_pos = forward_batch.dp_local_num_tokens = None
-            set_dp_buffer_len(
-                global_dp_buffer_len,
-                num_tokens,
-                forward_batch.dp_padding_mode.is_max_len(),
-            )
+            # set_dp_buffer_len(
+            #     global_dp_buffer_len,
+            #     num_tokens,
+            #     forward_batch.dp_padding_mode.is_max_len(),
+            # )
             set_is_extend_in_batch(False)
 
             kwargs = {}
@@ -840,6 +853,8 @@ class CudaGraphRunner:
         if self.require_gathered_buffer:
             self.global_num_tokens_gpu.fill_(bs * self.num_tokens_per_bs)
             self.global_num_tokens_for_logprob_gpu.fill_(bs * self.num_tokens_per_bs)
+        forward_batch.dp_local_dp_buffer = self.dp_local_dp_buffer[:raw_num_token],
+        forward_batch.dp_global_dp_buffer = self.dp_global_dp_buffer[:raw_num_token * self.dp_size]
         if enable_num_token_non_padded(self.model_runner.server_args):
             num_token_non_padded = forward_batch.num_token_non_padded
             if self.require_gathered_buffer and not self.nsa_enable_prefill_cp:

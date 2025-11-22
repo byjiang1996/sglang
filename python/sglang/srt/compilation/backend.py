@@ -21,6 +21,10 @@ from sglang.srt.compilation.compiler_interface import EagerAdapter, InductorAdap
 from sglang.srt.compilation.cuda_piecewise_backend import CUDAPiecewiseBackend
 from sglang.srt.compilation.pass_manager import PostGradPassManager
 from sglang.srt.utils.common import rank0_log
+from sglang.srt.layers.dp_attention import (
+    get_attention_dp_rank,
+    get_attention_tp_rank,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -371,6 +375,8 @@ class SGLangBackend:
             "enable_auto_functionalized_v2": False,
         }
         self.compile_config = config
+        self.rank = get_attention_tp_rank()
+        self.dp_rank = get_attention_dp_rank()
 
     def configure_post_pass(self):
         self.post_grad_pass_manager.configure()
@@ -390,9 +396,7 @@ class SGLangBackend:
         )
 
         os.makedirs(cache_dir, exist_ok=True)
-        rank = 0
-        dp_rank = 0
-        local_cache_dir = os.path.join(cache_dir, f"rank_{rank}_{dp_rank}", model_tag)
+        local_cache_dir = os.path.join(cache_dir, f"rank_{self.rank}_{self.dp_rank}", model_tag)
         os.makedirs(local_cache_dir, exist_ok=True)
         self.compiler_manager.initialize_cache(
             local_cache_dir, disable_cache=False, prefix=""
@@ -432,7 +436,7 @@ class SGLangBackend:
             self,
         ).run(*example_inputs)
 
-        graph_path = os.path.join(local_cache_dir, "computation_graph.py")
+        graph_path = os.path.join(local_cache_dir, f"computation_graph_{time.time()}.py")
         if not os.path.exists(graph_path):
             # code adapted from https://github.com/thuml/depyf/blob/dab831108a752d1facc00acdd6d4243891845c37/depyf/explain/patched_lazy_format_graph_code.py#L30 # noqa
             # use `print_readable` because it can include submodules
