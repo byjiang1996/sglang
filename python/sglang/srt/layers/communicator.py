@@ -336,6 +336,18 @@ class LayerCommunicator:
                 context=self._context,
             )
         )
+        def fake_communicate_summable_tensor_pair_fn(a, b) -> Tuple[torch.Tensor, torch.Tensor]:
+            return a, b
+
+        from sglang.srt.utils import (
+            direct_register_custom_op,
+        )
+        direct_register_custom_op(
+            op_name="_communicate_summable_tensor_pair_fn",
+            op_func=self._communicate_summable_tensor_pair_fn,
+            mutates_args=[],
+            fake_impl=fake_communicate_summable_tensor_pair_fn,
+        )
 
         self._speculative_algo = SpeculativeAlgorithm.from_string(
             get_global_server_args().speculative_algorithm
@@ -506,14 +518,14 @@ class LayerCommunicator:
         self,
         hidden_states: torch.Tensor,
         residual: torch.Tensor,
-        forward_batch: ForwardBatch,
+        # forward_batch: ForwardBatch,
     ):
-        return self._communicate_summable_tensor_pair_fn(
+        return torch.ops.sglang._communicate_summable_tensor_pair_fn(
             hidden_states=hidden_states,
             residual=residual,
-            forward_batch=forward_batch,
-            context=self._context,
-            allow_reduce_scatter=self.allow_reduce_scatter,
+            # forward_batch=forward_batch,
+            # context=self._context,
+            # allow_reduce_scatter=self.allow_reduce_scatter,
         )
 
     def should_use_reduce_scatter(self, forward_batch: ForwardBatch):
@@ -879,10 +891,11 @@ class CommunicateSummableTensorPairFn:
     def _trivial(
         hidden_states: torch.Tensor,
         residual: torch.Tensor,
-        forward_batch: ForwardBatch,
-        context: CommunicateContext,
-        **kwargs,
-    ):
+        # forward_batch: ForwardBatch,
+        # context: CommunicateContext,
+        # **kwargs,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        print("!!!!")
         return hidden_states, residual
 
     @staticmethod

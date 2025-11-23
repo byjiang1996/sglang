@@ -265,6 +265,8 @@ class ModelRunner:
         req_to_token_pool: Optional[ReqToTokenPool] = None,
         token_to_kv_pool_allocator: Optional[BaseTokenToKVPoolAllocator] = None,
     ):
+        torch._dynamo.config.reorderable_logging_functions.add(print)
+
         # Parse args
         self.mem_fraction_static = mem_fraction_static
         self.device = server_args.device

@@ -580,8 +580,8 @@ class Qwen3MoeDecoderLayer(nn.Module):
         if should_allreduce_fusion:
             hidden_states._sglang_needs_allreduce_fusion = True
         else:
-            hidden_states, residual = self.layer_communicator.postprocess_layer(
-                hidden_states, residual, forward_batch
+            self.layer_communicator.postprocess_layer(
+                hidden_states, residual
             )
 
         return hidden_states, residual
