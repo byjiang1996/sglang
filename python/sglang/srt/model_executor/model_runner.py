@@ -2180,7 +2180,6 @@ class ModelRunner:
     def forward_idle(
         self, forward_batch: ForwardBatch, pp_proxy_tensors=None
     ) -> Union[LogitsProcessorOutput, PPProxyTensors]:
-        print(forward_batch.dp_local_dp_buffer.shape, forward_batch.dp_global_dp_buffer.shape)
         kwargs = {}
         if self.support_pp:
             kwargs["pp_proxy_tensors"] = pp_proxy_tensors
@@ -2272,6 +2271,7 @@ class ModelRunner:
         else:
             forward_batch.prepare_attn_tp_scatter_input(self)
 
+        print(f"START non-decode: {forward_batch.forward_mode}", forward_batch.dp_local_dp_buffer.shape, forward_batch.dp_global_dp_buffer.shape)
         if forward_batch.forward_mode.is_decode():
             ret = self.forward_decode(
                 forward_batch,
@@ -2294,6 +2294,8 @@ class ModelRunner:
             ret = self.forward_idle(forward_batch, pp_proxy_tensors=pp_proxy_tensors)
         else:
             raise ValueError(f"Invalid forward mode: {forward_batch.forward_mode}")
+
+        print(f"END non-decode: {forward_batch.forward_mode}", forward_batch.dp_local_dp_buffer.shape, forward_batch.dp_global_dp_buffer.shape)
 
         if (
             forward_batch.global_num_tokens_cpu is not None

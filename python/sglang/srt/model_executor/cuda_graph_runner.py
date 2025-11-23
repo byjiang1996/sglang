@@ -853,7 +853,7 @@ class CudaGraphRunner:
         if self.require_gathered_buffer:
             self.global_num_tokens_gpu.fill_(bs * self.num_tokens_per_bs)
             self.global_num_tokens_for_logprob_gpu.fill_(bs * self.num_tokens_per_bs)
-        forward_batch.dp_local_dp_buffer = self.dp_local_dp_buffer[:raw_num_token],
+        forward_batch.dp_local_dp_buffer = self.dp_local_dp_buffer[:raw_num_token]
         forward_batch.dp_global_dp_buffer = self.dp_global_dp_buffer[:raw_num_token * self.dp_size]
         if enable_num_token_non_padded(self.model_runner.server_args):
             num_token_non_padded = forward_batch.num_token_non_padded
@@ -918,7 +918,9 @@ class CudaGraphRunner:
             graph_key = f"{get_current_stream_idx()}_{self.bs}"
         else:
             graph_key = self.bs
+        print("START decode", forward_batch.dp_local_dp_buffer.shape, forward_batch.dp_global_dp_buffer.shape)
         self.graphs[graph_key].replay()
+        print("END decode", forward_batch.dp_local_dp_buffer.shape, forward_batch.dp_global_dp_buffer.shape)
         output = self.output_buffers[graph_key]
         if isinstance(output, LogitsProcessorOutput):
             return LogitsProcessorOutput(

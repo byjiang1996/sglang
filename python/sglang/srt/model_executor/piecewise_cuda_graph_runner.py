@@ -253,10 +253,14 @@ class PiecewiseCudaGraphRunner:
                 self.global_num_tokens_for_logprob_gpu = None
                 self.global_dp_buffer_len = None
 
+            dp_padding_mode = DpPaddingMode.get_dp_padding_mode(
+                True, self.global_num_tokens_gpu.tolist()
+            )
             set_dp_buffer_len(
                 self.global_dp_buffer_len,
                 self.max_num_tokens,
-                True, # TODO: fix me
+                dp_padding_mode, # TODO: fix me
+                self.global_num_tokens_gpu.tolist()
             )
             self.dp_local_dp_buffer = get_local_dp_buffer()
             self.dp_global_dp_buffer = get_global_dp_buffer()
@@ -454,9 +458,10 @@ class PiecewiseCudaGraphRunner:
         global_dp_buffer_len = None
         if self.global_dp_buffer_len is not None:
             global_dp_buffer_len = self.global_dp_buffer_len * num_tokens // self.max_num_tokens
+        forward_mode = ForwardMode.EXTEND if num_tokens > 0 else ForwardMode.IDLE
         with torch.device(self.device):
             forward_batch = ForwardBatch(
-                forward_mode=ForwardMode.EXTEND,
+                forward_mode=forward_mode,
                 batch_size=bs,
                 input_ids=input_ids,
                 input_embeds=input_embeds,
@@ -587,6 +592,14 @@ class PiecewiseCudaGraphRunner:
 
         next_token_logits_buffer = None
 
+        if self.require_gathered_buffer:
+            if self.require_mlp_tp_gather:
+                global_dp_buffer_len = static_num_tokens * self.dp_size
+            else:
+                global_dp_buffer_len = static_num_tokens
+        else:
+            global_dp_buffer_len = None
+
         static_forward_batch = ForwardBatch(
             forward_mode=forward_batch.forward_mode,
             batch_size=bs,
@@ -617,7 +630,7 @@ class PiecewiseCudaGraphRunner:
             global_num_tokens_gpu=forward_batch.global_num_tokens_gpu,
             global_num_tokens_for_logprob_gpu=forward_batch.global_num_tokens_for_logprob_gpu,
             dp_padding_mode=forward_batch.dp_padding_mode,
-            global_dp_buffer_len=forward_batch.global_dp_buffer_len,
+            global_dp_buffer_len=global_dp_buffer_len,
             mrope_positions=mrope_positions,
             spec_algorithm=forward_batch.spec_algorithm,
             spec_info=forward_batch.spec_info,
@@ -632,10 +645,8 @@ class PiecewiseCudaGraphRunner:
             top_p_normalized_logprobs=forward_batch.top_p_normalized_logprobs,
             top_p=forward_batch.top_p,
             dp_local_dp_buffer=self.dp_local_dp_buffer[:static_num_tokens],
-            dp_global_dp_buffer=self.dp_global_dp_buffer[:forward_batch.global_dp_buffer_len]
+            dp_global_dp_buffer=self.dp_global_dp_buffer[:global_dp_buffer_len]
         )
-
-        print(static_forward_batch.dp_local_dp_buffer.shape, static_forward_batch.dp_global_dp_buffer.shape)
 
         return static_forward_batch
 
@@ -652,12 +663,14 @@ class PiecewiseCudaGraphRunner:
                 static_forward_batch, self.attention_layers, self.quant_config
             ):
                 with set_compiled(True):
+                    print("START piecewise", static_forward_batch.dp_local_dp_buffer.shape, static_forward_batch.dp_global_dp_buffer.shape)
                     output = self.model_runner.model.forward(
                         static_forward_batch.input_ids,
                         static_forward_batch.positions,
                         static_forward_batch,
                         **kwargs,
                     )
+                    print("END piecewise", static_forward_batch.dp_local_dp_buffer.shape, static_forward_batch.dp_global_dp_buffer.shape)
                 if isinstance(output, LogitsProcessorOutput):
                     return LogitsProcessorOutput(
                         next_token_logits=output.next_token_logits[

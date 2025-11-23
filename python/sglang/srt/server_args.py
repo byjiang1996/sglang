@@ -895,7 +895,7 @@ class ServerArgs:
         based on piecewise_cuda_graph_max_tokens.
         """
         capture_sizes = (
-            list(range(4, 33, 4))
+            list(range(0, 33, 4))
             + list(range(48, 257, 16))
             + list(range(288, 513, 32))
             + list(range(640, 4096 + 1, 128))
