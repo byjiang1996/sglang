@@ -112,7 +112,7 @@ class MambaAttnBackendBase(AttentionBackend):
             raise ValueError(f"Invalid forward mode: {forward_batch.forward_mode=}")
         mamba_cache_indices = self.req_to_token_pool.get_mamba_indices(
             forward_batch.req_pool_indices
-        )[:, 0].view(-1)
+        )
         return ForwardMetadata(
             query_start_loc=query_start_loc,
             mamba_cache_indices=mamba_cache_indices,
@@ -159,11 +159,18 @@ class MambaAttnBackendBase(AttentionBackend):
         ), f"max_num_tokens={max_num_tokens} must be divisible by max_bs={max_bs}"
         draft_token_num = max_num_tokens // max_bs
         for i in range(max_bs):
-            self.state_indices_list.append(
-                torch.full(
-                    (i + 1,), self.pad_slot_id, dtype=torch.int32, device=self.device
+            if draft_token_num != 1:
+                self.state_indices_list.append(
+                    torch.full(
+                        (i + 1, draft_token_num,), self.pad_slot_id, dtype=torch.int32, device=self.device
+                    )
                 )
-            )
+            else:
+                self.state_indices_list.append(
+                    torch.full(
+                        (i + 1,), self.pad_slot_id, dtype=torch.int32, device=self.device
+                    )
+                )
             self.query_start_loc_list.append(
                 torch.empty((i + 2,), dtype=torch.int32, device=self.device)
             )
@@ -210,7 +217,7 @@ class MambaAttnBackendBase(AttentionBackend):
             )
         else:
             raise ValueError(f"Invalid forward mode: {forward_mode=}")
-        mamba_indices = self.req_to_token_pool.get_mamba_indices(req_pool_indices)[:, 0].view(-1)
+        mamba_indices = self.req_to_token_pool.get_mamba_indices(req_pool_indices)
         self.state_indices_list[bs - 1][: len(mamba_indices)].copy_(mamba_indices)
 
         # If topk > 1, we need to use retrieve_next_token and retrieve_next_sibling to handle the eagle tree custom attention mask
@@ -244,7 +251,7 @@ class MambaAttnBackendBase(AttentionBackend):
         )
         # Make sure forward metadata is correctly handled for padding reqs
         req_pool_indices[bs - num_padding :] = 0
-        mamba_indices = self.req_to_token_pool.get_mamba_indices(req_pool_indices)[:, 0].view(-1)
+        mamba_indices = self.req_to_token_pool.get_mamba_indices(req_pool_indices)
         mamba_indices[bs - num_padding :] = -1
         self.state_indices_list[bs - 1][: len(mamba_indices)].copy_(mamba_indices)
         if forward_mode.is_decode_or_idle():
@@ -632,6 +639,9 @@ class GDNAttnBackend(MambaAttnBackendBase):
         mamba_cache_params = self.req_to_token_pool.mamba2_layer_cache(layer_id)
         conv_states = mamba_cache_params.conv[0]
         ssm_states = mamba_cache_params.temporal
+        # It is spec decoding request. If so, only write to the 1st cache index of that request please
+        if len(cache_indices.shape) != 1:
+            cache_indices = cache_indices[:, 0]
         if is_target_verify:
             assert isinstance(mamba_cache_params, MambaPool.SpeculativeState)
             intermediate_state_cache = mamba_cache_params.intermediate_ssm
