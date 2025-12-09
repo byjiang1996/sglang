@@ -415,23 +415,18 @@ def fused_recurrent_gated_delta_rule_update_fwd_kernel(
     mask_h = mask_k[:, None] & mask_v[None, :]
 
     b_h = tl.zeros([BK, BV], dtype=tl.float32)
+    cache_idx = tl.load(h0_indices + i_n)
     if USE_INITIAL_STATE:
-        idx = tl.load(h0_indices + i_n)
         # Add bounds checking for idx
-        if idx >= 0:  # Assuming negative indices are invalid
+        if cache_idx >= 0:  # Assuming negative indices are invalid
             p_h0 = (
                 h0_source
-                + idx * HV * K * V
+                + cache_idx * HV * K * V
                 + i_hv * K * V
                 + o_k[:, None] * V
                 + o_v[None, :]
             )
             b_h += tl.load(p_h0, mask=mask_h, other=0).to(tl.float32)
-
-    # Prepare intermediate state cache variables if enabled
-    cache_idx = -1
-    if CACHE_INTERMEDIATE_STATES:
-        cache_idx = tl.load(h0_indices + i_n)
 
     step_idx = 0
     for _ in range(0, T):
@@ -506,11 +501,10 @@ def fused_recurrent_gated_delta_rule_update_fwd_kernel(
     # Store final state back to h0_source with bounds checking
     # ssm states
     if not DISABLE_STATE_UPDATE:
-        idx = tl.load(h0_indices + i_n)
-        if idx >= 0:  # Add bounds checking
+        if cache_idx >= 0:  # Add bounds checking
             p_h0 = (
                 h0_source
-                + idx * HV * K * V
+                + cache_idx * HV * K * V
                 + i_hv * K * V
                 + o_k[:, None] * V
                 + o_v[None, :]
