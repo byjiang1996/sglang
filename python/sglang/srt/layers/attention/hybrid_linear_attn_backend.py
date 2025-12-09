@@ -112,7 +112,7 @@ class MambaAttnBackendBase(AttentionBackend):
             raise ValueError(f"Invalid forward mode: {forward_batch.forward_mode=}")
         mamba_cache_indices = self.req_to_token_pool.get_mamba_indices(
             forward_batch.req_pool_indices
-        )
+        )[:, 0].view(-1)
         return ForwardMetadata(
             query_start_loc=query_start_loc,
             mamba_cache_indices=mamba_cache_indices,
@@ -210,7 +210,7 @@ class MambaAttnBackendBase(AttentionBackend):
             )
         else:
             raise ValueError(f"Invalid forward mode: {forward_mode=}")
-        mamba_indices = self.req_to_token_pool.get_mamba_indices(req_pool_indices)
+        mamba_indices = self.req_to_token_pool.get_mamba_indices(req_pool_indices)[:, 0].view(-1)
         self.state_indices_list[bs - 1][: len(mamba_indices)].copy_(mamba_indices)
 
         # If topk > 1, we need to use retrieve_next_token and retrieve_next_sibling to handle the eagle tree custom attention mask
@@ -244,7 +244,7 @@ class MambaAttnBackendBase(AttentionBackend):
         )
         # Make sure forward metadata is correctly handled for padding reqs
         req_pool_indices[bs - num_padding :] = 0
-        mamba_indices = self.req_to_token_pool.get_mamba_indices(req_pool_indices)
+        mamba_indices = self.req_to_token_pool.get_mamba_indices(req_pool_indices)[:, 0].view(-1)
         mamba_indices[bs - num_padding :] = -1
         self.state_indices_list[bs - 1][: len(mamba_indices)].copy_(mamba_indices)
         if forward_mode.is_decode_or_idle():

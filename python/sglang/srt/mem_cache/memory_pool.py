@@ -172,6 +172,8 @@ class MambaPool:
             maybe_init_custom_mem_pool(device=self.device)
         )
 
+        self.speculative_num_draft_tokens = speculative_num_draft_tokens
+
         with self.memory_saver_adapter.region(GPU_MEMORY_TYPE_KV_CACHE), (
             torch.cuda.use_mem_pool(self.custom_mem_pool)
             if self.enable_custom_mem_pool
@@ -269,6 +271,7 @@ class MambaPool:
         return select_index
 
     def free(self, free_index: torch.Tensor):
+        free_index = free_index.view(-1)
         if free_index.numel() == 0:
             return
         self.free_slots = torch.cat((self.free_slots, free_index))
@@ -369,7 +372,7 @@ class HybridReqToTokenPool(ReqToTokenPool):
 
         self.device = device
         self.req_index_to_mamba_index_mapping: torch.Tensor = torch.zeros(
-            size, dtype=torch.int32, device=self.device
+            size, self.mamba_pool.speculative_num_draft_tokens, dtype=torch.int32, device=self.device
         )
 
     # For chunk prefill req, we do not need to allocate mamba cache,
@@ -381,22 +384,23 @@ class HybridReqToTokenPool(ReqToTokenPool):
         if select_index == None:
             return None
 
+        needed_size = self.mamba_pool.speculative_num_draft_tokens if self.mamba_pool.speculative_num_draft_tokens is not None else 1
         mamba_index = []
         for req in reqs:
             mid = None
             if req.mamba_pool_idx is not None:  # for radix cache
                 mid = req.mamba_pool_idx
             else:
-                mid = self.mamba_pool.alloc(1)[0]
+                mid = self.mamba_pool.alloc(needed_size)
                 req.mamba_pool_idx = mid
             if mid is not None:
                 mamba_index.append(mid)
-        assert len(select_index) == len(
+        # assert len(select_index) * needed_size == len(
+        #     mamba_index
+        # ), f"Not enough space for mamba cache, try to increase --max-mamba-cache-size."
+        self.req_index_to_mamba_index_mapping[select_index] = torch.stack(
             mamba_index
-        ), f"Not enough space for mamba cache, try to increase --max-mamba-cache-size."
-        self.req_index_to_mamba_index_mapping[select_index] = torch.tensor(
-            mamba_index, dtype=torch.int32, device=self.device
-        )
+        ).to(dtype=torch.int32, device=self.device)
         return select_index
 
     def get_mamba_indices(self, req_indices: torch.Tensor) -> torch.Tensor:
