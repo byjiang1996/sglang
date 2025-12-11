@@ -350,6 +350,7 @@ def fused_recurrent_gated_delta_rule_update_fwd_kernel(
     o,
     h0_source,
     h0_indices,
+    last_steps_ptr,
     cu_seqlens,
     scale,
     intermediate_states_buffer,
@@ -372,7 +373,7 @@ def fused_recurrent_gated_delta_rule_update_fwd_kernel(
     IS_VARLEN: tl.constexpr,
     DISABLE_STATE_UPDATE: tl.constexpr,  # whether to disable final state update
     DISABLE_OUTPUT_CALCULATION: tl.constexpr,  # whether to disable output calculation
-    CACHE_INTERMEDIATE_STATES: tl.constexpr,
+    IS_SPEC_DECODING: tl.constexpr,
     HAS_EAGLE_TREE_CUSTOM_ATTN_MASK: tl.constexpr,
 ):
     i_k, i_v, i_nh = tl.program_id(0), tl.program_id(1), tl.program_id(2)
@@ -415,7 +416,10 @@ def fused_recurrent_gated_delta_rule_update_fwd_kernel(
     mask_h = mask_k[:, None] & mask_v[None, :]
 
     b_h = tl.zeros([BK, BV], dtype=tl.float32)
-    cache_idx = tl.load(h0_indices + i_n)
+    #  TODO: fixme. 1st index contains the last accepted data?
+    cache_idx = tl.load(h0_indices + i_n * cache_steps + 0)
+    last_step_idx = tl.load(last_steps_ptr + cache_idx).to(tl.int64)
+    cache_idx = tl.load(h0_indices + i_n * cache_steps + last_step_idx)
     if USE_INITIAL_STATE:
         # Add bounds checking for idx
         if cache_idx >= 0:  # Assuming negative indices are invalid
@@ -437,16 +441,25 @@ def fused_recurrent_gated_delta_rule_update_fwd_kernel(
                 parent_step_idx = tl.sum(
                     tl.where(token_indices == step_idx, parent_idx_tokens, 0)
                 )
-                step_offset = parent_step_idx * HV * K * V
-                cache_ptr = (
-                    intermediate_states_buffer
-                    + cache_idx * cache_steps * HV * K * V
-                    + step_offset
+                # step_offset = parent_step_idx * HV * K * V
+                # cache_ptr = (
+                #     intermediate_states_buffer
+                #     + cache_idx * cache_steps * HV * K * V
+                #     + step_offset
+                #     + i_hv * K * V
+                #     + o_k[:, None] * V
+                #     + o_v[None, :]
+                # )
+                # b_h = tl.load(cache_ptr, mask=mask_h, other=0).to(tl.float32)
+                parent_cache_idx = tl.load(h0_indices + i_n * cache_steps + parent_step_idx)
+                p_h0 = (
+                    h0_source
+                    + parent_cache_idx * HV * K * V
                     + i_hv * K * V
                     + o_k[:, None] * V
                     + o_v[None, :]
                 )
-                b_h = tl.load(cache_ptr, mask=mask_h, other=0).to(tl.float32)
+                b_h = tl.load(p_h0, mask=mask_h, other=0).to(tl.float32)
 
         b_q = tl.load(p_q, mask=mask_k, other=0).to(tl.float32)
         b_k = tl.load(p_k, mask=mask_k, other=0).to(tl.float32)
@@ -475,19 +488,29 @@ def fused_recurrent_gated_delta_rule_update_fwd_kernel(
             tl.store(p_o, b_o.to(p_o.dtype.element_ty), mask=mask_v)
 
         # store intermediate states if enabled
-        if CACHE_INTERMEDIATE_STATES:
+        if IS_SPEC_DECODING:
             if cache_idx >= 0:
                 # Compute cache pointer for this step
-                step_offset = step_idx * HV * K * V
-                cache_ptr = (
-                    intermediate_states_buffer
-                    + cache_idx * cache_steps * HV * K * V
-                    + step_offset
+                # step_offset = step_idx * HV * K * V
+                # cache_ptr = (
+                #     intermediate_states_buffer
+                #     + cache_idx * cache_steps * HV * K * V
+                #     + step_offset
+                #     + i_hv * K * V
+                #     + o_k[:, None] * V
+                #     + o_v[None, :]
+                # )
+                # tl.store(cache_ptr, b_h.to(cache_ptr.dtype.element_ty), mask=mask_h)
+
+                step_cache_idx = tl.load(h0_indices + i_n * cache_steps + step_idx)
+                p_h0 = (
+                    h0_source
+                    + step_cache_idx * HV * K * V
                     + i_hv * K * V
                     + o_k[:, None] * V
                     + o_v[None, :]
                 )
-                tl.store(cache_ptr, b_h.to(cache_ptr.dtype.element_ty), mask=mask_h)
+                tl.store(p_h0, b_h.to(p_h0.dtype.element_ty), mask=mask_h)
 
         step_idx += 1
 
@@ -521,6 +544,7 @@ def fused_recurrent_gated_delta_rule_update_fwd(
     scale: float,
     initial_state_source: torch.Tensor,
     initial_state_indices: torch.Tensor,
+    last_steps: Optional[torch.Tensor] = None,
     use_qk_l2norm_in_kernel: bool = False,
     cu_seqlens: Optional[torch.LongTensor] = None,
     disable_state_update: bool = False,
@@ -565,6 +589,7 @@ def fused_recurrent_gated_delta_rule_update_fwd(
         o=o,
         h0_source=initial_state_source,
         h0_indices=initial_state_indices,
+        last_steps_ptr=last_steps,
         cu_seqlens=cu_seqlens,
         scale=scale,
         intermediate_states_buffer=intermediate_states_buffer,
@@ -587,7 +612,7 @@ def fused_recurrent_gated_delta_rule_update_fwd(
         IS_VARLEN=cu_seqlens is not None,
         DISABLE_STATE_UPDATE=disable_state_update,
         DISABLE_OUTPUT_CALCULATION=disable_output_calculation,
-        CACHE_INTERMEDIATE_STATES=intermediate_states_buffer is not None,
+        IS_SPEC_DECODING=last_steps is not None,
         HAS_EAGLE_TREE_CUSTOM_ATTN_MASK=retrieve_parent_token is not None,
         num_warps=num_warps,
         num_stages=num_stages,
@@ -610,6 +635,7 @@ class FusedRecurrentUpdateFunction(torch.autograd.Function):
         scale: float,
         initial_state_source: torch.Tensor,
         initial_state_indices: torch.Tensor,
+        last_steps: Optional[torch.Tensor] = None,
         cu_seqlens: Optional[torch.LongTensor] = None,
         use_qk_l2norm_in_kernel: bool = False,
         disable_state_update: bool = False,
@@ -627,6 +653,7 @@ class FusedRecurrentUpdateFunction(torch.autograd.Function):
             scale=scale,
             initial_state_source=initial_state_source,
             initial_state_indices=initial_state_indices,
+            last_steps=last_steps,
             use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
             cu_seqlens=cu_seqlens,
             disable_state_update=disable_state_update,
@@ -657,6 +684,7 @@ def fused_recurrent_gated_delta_rule_update(
     scale: float = None,
     initial_state_source: torch.Tensor = None,
     initial_state_indices: torch.Tensor = None,
+    last_steps: Optional[torch.Tensor] = None,
     cu_seqlens: Optional[torch.LongTensor] = None,
     use_qk_l2norm_in_kernel: bool = False,
     disable_state_update: bool = False,
@@ -694,6 +722,7 @@ def fused_recurrent_gated_delta_rule_update(
         scale,
         initial_state_source,
         initial_state_indices,
+        last_steps,
         cu_seqlens,
         use_qk_l2norm_in_kernel,
         disable_state_update,

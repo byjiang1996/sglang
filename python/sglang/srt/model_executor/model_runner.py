@@ -1446,7 +1446,7 @@ class ModelRunner:
         assert config is not None
 
         speculativa_ratio = (
-            0
+            1
             if server_args.speculative_num_draft_tokens is None
             else server_args.speculative_num_draft_tokens
         )
@@ -1457,7 +1457,7 @@ class ModelRunner:
             # with disable radix cache, sets the max_mamba_cache_size based on the max_running_requests
             if server_args.max_mamba_cache_size is None:
                 if server_args.max_running_requests is not None:
-                    server_args.max_mamba_cache_size = server_args.max_running_requests
+                    server_args.max_mamba_cache_size = server_args.max_running_requests * speculativa_ratio
                 else:
                     server_args.max_mamba_cache_size = 512
         else:
@@ -1484,7 +1484,6 @@ class ModelRunner:
         mamba_state_memory = (
             server_args.max_mamba_cache_size
             * config.mamba2_cache_params.mamba_cache_per_req
-            * (1 + speculativa_ratio)
             / (1 << 30)
         )
         return total_rest_memory - mamba_state_memory
